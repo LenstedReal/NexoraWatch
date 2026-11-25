@@ -34,6 +34,8 @@ export type DetectedMedia = {
  * Injected into pages of supported sites (before content loads, so fetch/XHR hooks catch the first manifest request).
  * Finds media via <video>/<source>, fetch(), XMLHttpRequest and the Resource Timing API.
  * Segment files are ignored; blob:/MediaSource players are reported as "blocked" (not shareable).
+ * Kick's player loads its stream inside a worker and Dailymotion's inside a frame, where none of that can look: on
+ * their pages the address their player gets is asked from the site's own API (same origin, the person's session).
  */
 const DETECTOR = `(function(){
 if(window.__nxDetector)return;window.__nxDetector=true;
@@ -69,34 +71,59 @@ function scan(){
     }
   }catch(e){}
 }
+var KSKIP={browse:1,categories:1,category:1,following:1,dashboard:1,search:1,settings:1,login:1,signup:1,auth:1,api:1,popout:1,
+transactions:1,subscriptions:1,messages:1,help:1,about:1,'terms-of-service':1,'privacy-policy':1,'community-guidelines':1,
+'dmca-policy':1,careers:1,leaderboards:1,emotes:1,store:1,download:1,apps:1,mobile:1,contact:1,partners:1,security:1};
+function api(u,pick,how){
+  try{
+    (of||fetch).call(window,u,{credentials:'include',headers:{accept:'application/json'}})
+      .then(function(r){return r.ok?r.json():null})
+      .then(function(j){var v=null;try{v=j&&pick(j)}catch(e){}if(typeof v==='string'&&/^https?:/.test(v))report(v,how)})
+      .catch(function(){});
+  }catch(e){}
+}
+var lastHref='';
+function extract(){
+  if(location.href===lastHref)return;lastHref=location.href;
+  try{
+    var h=location.hostname.replace(/^(www|m)\\./,''),p=location.pathname,m;
+    if(h==='kick.com'){
+      if((m=p.match(/\\/videos?\\/([0-9a-f-]{36})/i)))api('/api/v1/video/'+m[1],function(j){return j.source},'kick');
+      else if((m=location.search.match(/[?&]clip=(clip_[\\w-]+)/)||p.match(/\\/clips\\/(clip_[\\w-]+)/)))
+        api('/api/v2/clips/'+m[1],function(j){return j.clip&&(j.clip.clip_url||j.clip.video_url)},'kick');
+      else if((m=p.match(/^\\/([\\w-]{3,40})\\/?$/))&&!KSKIP[m[1].toLowerCase()])
+        api('/api/v2/channels/'+m[1],function(j){return j.livestream&&j.playback_url},'kick');
+    }else if(h==='dailymotion.com'){
+      if((m=p.match(/\\/video\\/([a-z0-9]{5,12})/i)))
+        api('/player/metadata/video/'+m[1],function(j){var a=j.qualities&&j.qualities.auto;return a&&a[0]&&a[0].url},'dailymotion');
+    }
+  }catch(e){}
+}
+function tick(){scan();extract()}
 document.addEventListener('play',function(e){if(e.target&&e.target.tagName==='VIDEO')scan()},true);
-document.addEventListener('DOMContentLoaded',scan);
-setInterval(scan,1500);
+document.addEventListener('DOMContentLoaded',tick);
+setInterval(tick,1500);
 })();true;`;
 
 const YT_RE = /(?:youtube\.com\/(?:watch\?(?:.*&)?v=|shorts\/|live\/)|youtu\.be\/)([\w-]{11})/;
 // Sites with an official player in the room: the page itself is offered (the server turns it into that player).
 const VIMEO_RE = /^https?:\/\/(?:www\.|player\.)?vimeo\.com\/(?:video\/|channels\/[\w-]+\/|groups\/[\w-]+\/videos\/|album\/\d+\/video\/|showcase\/\d+\/video\/)?(\d{6,12})(?:\/([0-9a-f]{6,16}))?\/?(?:[?#]|$)/i;
 const TWITCH_VOD_RE = /^https?:\/\/(?:www\.|m\.)?twitch\.tv\/(?:videos|[A-Za-z0-9_]{3,25}\/(?:v|video))\/(\d{6,12})\/?(?:[?#]|$)/i;
-const TWITCH_LIVE_RE = /^https?:\/\/(?:www\.|m\.)?twitch\.tv\/([A-Za-z0-9][A-Za-z0-9_]{2,24})\/?(?:[?#]|$)/i;
-const TWITCH_PAGES = new Set(["directory", "videos", "settings", "downloads", "search", "subscriptions", "wallet", "turbo", "store", "jobs",
-  "privacy", "legal", "about", "friends", "inventory", "drops", "prime", "team", "teams", "user", "collections", "popout", "moderator",
-  "embed", "login", "signup", "following", "broadcast", "partner", "creatorcamp", "bits", "payments", "messages", "activate",
-  "annual-recap", "events", "clips", "category", "security", "safety", "ads"]);
-// Kick: only a live channel has an official embed (player.kick.com/<channel>); videos/clips are not offered.
-const KICK_LIVE_RE = /^https?:\/\/(?:www\.|m\.)?kick\.com\/([A-Za-z0-9][A-Za-z0-9_-]{2,39})\/?(?:[?#]|$)/i;
-const KICK_PAGES = new Set(["browse", "categories", "category", "following", "dashboard", "video", "videos", "clips", "search", "settings",
-  "about", "terms-of-service", "privacy-policy", "community-guidelines", "dmca-policy", "careers", "help", "login", "signup", "auth",
-  "api", "popout", "transactions", "subscriptions", "messages", "creator-program", "leaderboards", "emotes", "store", "download", "apps",
-  "mobile", "contact", "partners", "security"]);
 const ARCHIVE_RE = /^https?:\/\/(?:www\.)?archive\.org\/details\/([A-Za-z0-9][A-Za-z0-9._-]{0,99})(?:[/?#]|$)/i;
-// src2: TikTok / Instagram / X / Facebook posts: the page address is offered; the room plays it in the official embed.
+// src2: TikTok / Facebook posts: the page address is offered; the room plays it in the official embed.
 const TIKTOK_RE = /^https?:\/\/(?:www\.|m\.)?tiktok\.com\/@[\w.-]+\/video\/(\d{15,21})/i;
-const IG_RE = /^https?:\/\/(?:www\.|m\.)?instagram\.com\/(?:[\w.]+\/)?(p|reels?|tv)\/([\w-]{5,40})/i;
-const X_RE = /^https?:\/\/(?:www\.|mobile\.)?(?:x|twitter)\.com\/[\w]{1,20}\/status(?:es)?\/(\d{5,20})/i;
 const FB_RE = /^https?:\/\/(?:www\.|m\.|web\.)?facebook\.com\/(?:watch\/?\?(?:.*&)?v=(\d{6,20})|[\w.-]+\/videos\/(?:[\w.-]+\/)?(\d{6,20})|reel\/(\d{6,20}))/i;
-// Their players stream through MediaSource or their own CDNs: what the page loads is never offered for these sites.
-const NO_SNIFF = /youtube\.com|youtu\.be|googlevideo\.com|vimeo\.com|vimeocdn\.com|twitch\.tv|ttvnw\.net|kick\.com|tiktok\.com|tiktokcdn|instagram\.com|cdninstagram|fbcdn\.net|facebook\.com|x\.com|twitter\.com|twimg\.com/i;
+// Sites whose official player the room uses: their page is offered (pageOffer), never a file the page loads (they
+// stream through MediaSource, and their terms allow only their own player). On every other supported site (X, Kick,
+// Reddit, Dailymotion, Rumble, Odysee, Streamable…) the file the page plays is offered and the room plays it in sync.
+const OFFICIAL_HOSTS = ["youtube.com", "youtu.be", "youtube-nocookie.com", "vimeo.com", "twitch.tv", "tiktok.com", "facebook.com", "fb.watch", "instagram.com"];
+export const isOfficialHost = (host: string) => OFFICIAL_HOSTS.some((d) => host === d || host.endsWith(`.${d}`));
+// Pieces of a stream with sound only or picture only (X's audio playlist, Reddit's DASH files): the page's main
+// playlist, which carries both, is offered instead.
+const PARTIAL = /\/(?:mp4a|audio)[^/?#]*\/|hls_audio|dash_audio|[_-]audio[_-]?only|v\.redd\.it\/[^?#]*\/dash_/i;
+export const isPartialStream = (url: string) => PARTIAL.test(url);
+const HLS_VARIANT = /\/(?:avc1|hevc|hvc1)\/|\/\d{3,4}x\d{3,4}\/|chunklist|hls_\d{3,4}\.m3u8|\/v1\/playlist\/|[_/]\d{3,4}p\d*(?:\.m3u8|\/)/i;
+const HLS_MASTER = /master|playlist|index|manifest|\/pl\/[\w-]+\.m3u8/i;
 const PAGE_KINDS = new Set<DetectedMedia["kind"]>(["youtube", "vimeo", "twitch", "archive", "tiktok", "facebook"]);
 
 /** The page being viewed, when it is a video of a site with an official player (or an Internet Archive item). */
@@ -107,7 +134,8 @@ export function pageOffer(url: string, title: string, fallbackTitle: string): De
   if (vm) return { url: `https://vimeo.com/${vm[1]}${vm[2] ? `/${vm[2]}` : ""}`, kind: "vimeo", page: url, title: title || "Vimeo", how: "page" };
   const tv = url.match(TWITCH_VOD_RE);
   if (tv) return { url: `https://www.twitch.tv/videos/${tv[1]}`, kind: "twitch", page: url, title: title || "Twitch", how: "page" };
-  // Twitch live channels, Kick, Instagram and X are not offered: they cannot play in sync for everyone.
+  // Twitch live channels and Instagram are not offered (their players cannot play in sync). X and Kick pages are not
+  // offered either: the file their page plays is found instead (DETECTOR) and plays in sync in Nexora's own player.
   const tt = url.match(TIKTOK_RE);
   if (tt) return { url: url.split(/[?#]/)[0], kind: "tiktok", page: url, title: title || "TikTok", how: "page" };
   const fb = url.match(FB_RE);
@@ -124,7 +152,8 @@ export function hostOf(url: string): string {
 }
 
 // Short-link domains of supported sites.
-const ALIASES: Record<string, string> = { "youtu.be": "youtube.com", "fb.watch": "facebook.com", "redd.it": "reddit.com", "v.redd.it": "reddit.com" };
+const ALIASES: Record<string, string> = { "youtu.be": "youtube.com", "fb.watch": "facebook.com", "redd.it": "reddit.com", "v.redd.it": "reddit.com",
+  "dai.ly": "dailymotion.com", "twitter.com": "x.com", "mobile.twitter.com": "x.com" };
 
 // Pages the supported sites send you through (cookie consent). Allowed for navigation only; never a video source.
 const HELPER_HOSTS = ["consent.google.com", "consent.youtube.com"];
@@ -142,10 +171,10 @@ function classify(url: string, blocked: boolean): DetectedMedia["kind"] {
   return "video";
 }
 
-function rank(m: DetectedMedia): number {
+export function rank(m: DetectedMedia): number {
   if (PAGE_KINDS.has(m.kind)) return -1;
   if (m.kind === "blocked") return 9;
-  if (m.kind === "hls") return /master|playlist|index/i.test(m.url) ? 0 : 1;
+  if (m.kind === "hls") return HLS_VARIANT.test(m.url) ? 1 : HLS_MASTER.test(m.url) || m.how === "kick" || m.how === "dailymotion" ? 0 : 1;
   if (m.how === "video" || m.how === "source") return 2;
   return 3;
 }
@@ -339,13 +368,14 @@ export function BrowserModal({
                   return;
                 }
                 if (m?.t !== "media" || typeof m.url !== "string") return;
-                if (!isAllowedHost(hostOf(String(m.page || "")), sites)) return;
-                // These sites stream through MediaSource or their own CDNs; the page itself is offered instead (see above).
-                if (NO_SNIFF.test(String(m.page || ""))) return;
+                const page = String(m.page || "");
+                if (!isAllowedHost(hostOf(page), sites)) return;
+                // Official-player sites: the page itself is offered instead (pageOffer, above).
+                if (isOfficialHost(hostOf(page)) || isPartialStream(m.url)) return;
                 addItem({
                   url: m.url,
                   kind: classify(m.url, !!m.blocked),
-                  page: String(m.page || ""),
+                  page,
                   title: String(m.title || "").slice(0, 120),
                   how: String(m.how || ""),
                   duration: typeof m.duration === "number" ? m.duration : undefined,

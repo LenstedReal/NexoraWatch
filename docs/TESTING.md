@@ -1,6 +1,8 @@
 # TESTING
 
 ## Otomatik (bu ortamda çalıştırıldı)
+- `frontend/src/lib/syncPolicy.test.js` (`cd frontend && npx craco test --watchAll=false syncPolicy`) — yavaş telefonda
+  misafirin atla → yüklen → geride kal → yine atla döngüsü (1.8.0 öncesi kural) ve yeni kuralın birkaç atlamada oturması.
 - `tests/upload_smoke.py <API> tests/sample.mp4` — multipart yükleme, Range 206, bayt eşleşmesi, yetkisiz silme/yükleme 403, kota 413, format 415.
 - Backend smoke (oda/rejoin/host-only/stale seq/WS hello-pong-push/kötü token/oda kalıcılığı) — sonuçlar `test_reports/`.
 

@@ -113,10 +113,14 @@ async def _guard(request: httpx.Request):
     await _assert_public(request.url.host)
 
 
-async def _probe(url: str, referer: str | None = None) -> dict:
-    headers = {"Range": "bytes=0-2047", "User-Agent": "NexoraWatch/1.0"}
+async def _probe(url: str, referer: str | None = None, origin: str | None = None, ranged: bool = True) -> dict:
+    headers = {"User-Agent": "NexoraWatch/1.0"}
+    if ranged:
+        headers["Range"] = "bytes=0-2047"
     if referer:
         headers["Referer"] = referer
+    if origin:
+        headers["Origin"] = origin
     try:
         async with httpx.AsyncClient(follow_redirects=True, timeout=8, max_redirects=5, event_hooks={"request": [_guard]}) as c:
             async with c.stream("GET", url, headers=headers) as r:
@@ -164,6 +168,29 @@ def _classify(url: str, p: dict, provider: str) -> dict | None:
                 "warning": None if ranged else "Sunucu HTTP Range desteklemiyor; ileri/geri sarma güvenilir olmayabilir",
                 "warning_code": None if ranged else "no_range"}
     return None
+
+
+# --- A file found by the app's browser: can the room's other devices open it? ------------------------------------
+# The phone that found it played it as the site's own page does (that site as Referer, its cookies). Everyone else
+# plays it from the room page: a request from our own address and, for HLS (hls.js reads the playlist with XHR), one
+# that CORS must allow. The server asks the same way, from another network, so a file locked to the site, to the
+# finder's connection or to a short session is refused here instead of failing on everyone's screen in the room.
+SOURCE_LOCKED = "Bu site videosunu yalnızca kendi sayfasında oynatıyor; odadaki diğer cihazlar açamaz"
+
+
+async def _assert_shareable(c: dict, referer: str | None):
+    if not referer or c.get("kind") not in ("direct", "hls"):
+        return
+    origin = config.WEB_URL
+    try:
+        p = await _probe(c["stream_url"], f"{origin}/", origin=origin, ranged=c["kind"] == "direct")
+    except ApiError as e:
+        if e.code == "network":  # a slow answer right after a good one: not a reason to refuse
+            return
+        raise ApiError(422, "source_locked", SOURCE_LOCKED)
+    allow = p["headers"].get("access-control-allow-origin", "").strip().rstrip("/")
+    if p["status"] >= 400 or (c["kind"] == "hls" and allow not in ("*", origin)):
+        raise ApiError(422, "source_locked", SOURCE_LOCKED)
 
 
 def _vimeo(url: str, parsed) -> dict | None:
@@ -227,7 +254,7 @@ def _kick(url: str, parsed) -> dict | None:
     if host not in KICK_HOSTS and host != "player.kick.com":
         return None
     if host in KICK_HOSTS and (KICK_RECORDED.match(path) or "clip" in dict(parse_qsl(parsed.query))):
-        raise ApiError(422, "kick_recorded", "Kick videoları herkeste aynı anda oynatılamıyor, bu yüzden desteklenmiyor")
+        raise ApiError(422, "kick_recorded", "Kick videosu bağlantıyla eşitlenemiyor; uygulamada Sitelerde gez ile aç, Nexora videoyu bulur")
     m = KICK_CHANNEL.match(path)
     if not m or (host in KICK_HOSTS and m.group(1).lower() in KICK_RESERVED):
         return None
@@ -540,6 +567,9 @@ async def resolve(url_in, referer=None, title=None) -> dict:
             raise ApiError(422, "twitch_live", "Twitch canlı yayınları eşitlenemiyor; kayıtlı yayın bağlantısı paylaş")
         if kind == "drive_embed":
             raise ApiError(422, "drive_no_stream", "Drive bu dosyayı akış olarak sunmuyor; dosyayı indirip Videoyu yükle ile ekle")
+        if kind in ("x", "kick"):
+            # Their embeds cannot be synced, but the app's browser finds the video file itself, and that plays in sync.
+            raise ApiError(422, "find_in_app", "Bu bağlantı yapıştırılınca eşitlenemiyor; uygulamada Sitelerde gez ile aç, Nexora videoyu bulur")
         raise ApiError(422, "no_sync_source", "Bu kaynak herkeste aynı anda oynatılamıyor, bu yüzden desteklenmiyor")
     if res.get("kind") in PROVIDER_LABELS:
         res["title"] = await _provider_title(res, custom_title)
@@ -610,6 +640,7 @@ async def _resolve(url_in, referer: str | None) -> dict:
             c["stream_url"] = raw
         elif (parsed.hostname or "").lower() in IA_HOSTS and c["kind"] == "direct":
             c["stream_url"] = url  # archive.org/download/... is the permanent address; the data server behind it is not
+        await _assert_shareable(c, referer)
         return {"url": url, "video_id": None, "embed_url": None, "title": name or parsed.hostname, "warning": None, **c}
     if HLS_EXT.search(url):
         raise ApiError(422, "manifest_invalid", "Adres .m3u8 ile bitiyor ama geçerli bir HLS manifesti döndürmüyor")

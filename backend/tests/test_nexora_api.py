@@ -427,10 +427,12 @@ def test_resolve_twitch_vod_live_and_clip():
 
 
 def test_resolve_unsynced_sources_are_refused():
-    """1.6.2: Nexora is a watch-together app; Kick live, Instagram and X cannot play in sync, so they are refused."""
-    for url in ("https://m.kick.com/SomeStreamer", "https://www.instagram.com/reel/C1a2B3c4D5e/", "https://x.com/someone/status/1790000000000000001"):
+    """1.6.2: Nexora is a watch-together app; Kick live, Instagram and X embeds cannot play in sync, so they are refused.
+    1.8.0: X and Kick say how it works instead: the app's browser finds their video file, which plays in sync."""
+    for url, code in (("https://m.kick.com/SomeStreamer", "find_in_app"), ("https://www.instagram.com/reel/C1a2B3c4D5e/", "no_sync_source"),
+                      ("https://x.com/someone/status/1790000000000000001", "find_in_app")):
         r = requests.post(f"{API}/resolve", json={"url": url})
-        assert r.status_code == 422 and r.json()["code"] == "no_sync_source", (url, r.text)
+        assert r.status_code == 422 and r.json()["code"] == code, (url, r.text)
 
 
 # Queue ("Sıra"): everyone adds and votes, only the host plays/removes, sorted by votes then time

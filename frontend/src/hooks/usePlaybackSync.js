@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "@/lib/api";
+import { createGuestSync, guestStep, noteJump } from "@/lib/syncPolicy";
 
-export const DRIFT_SEEK_S = 2;
-const RATE_BAND_S = 0.25;
+export { DRIFT_SEEK_S } from "@/lib/syncPolicy";
 const HOST_TOLERANCE_S = 0.75;
 const KEEPALIVE_MS = 20000;
 
@@ -24,6 +24,7 @@ export function usePlaybackSync({ room, isHost, conn, playerRef, ident }) {
   const lastPubRef = useRef(null);
   const suppressUntil = useRef(0);
   const cooldown = useRef(0);
+  const guest = useRef(createGuestSync()); // the guest's catch-up state (lib/syncPolicy.js)
   const playTry = useRef(0);
   const corrections = useRef(0);
   const errors = useRef(0);
@@ -91,15 +92,17 @@ export function usePlaybackSync({ room, isHost, conn, playerRef, ident }) {
     if (!p || !pb) return;
     p.setMuted?.(mutedRef.current);
     const target = expectedPosition(pb, conn.clockRef.current.offset);
+    // A live stream: every device rides its own live edge, a position from another device means nothing there.
+    const live = !!p.isLive?.();
     if (isHost) {
       suppressUntil.current = Date.now() + 1500;
-      lastPubRef.current = { at: Date.now(), playing: pb.playing, position: target, rate: rateOf(pb) };
-      p.setRate(rateRef.current);
-      if (target > 0.5) p.seek(target);
+      lastPubRef.current = { at: Date.now(), playing: pb.playing, position: live ? p.getTime() : target, rate: rateOf(pb) };
+      if (!live) p.setRate(rateRef.current);
+      if (!live && target > 0.5) p.seek(target);
       if (pb.playing) p.play().catch(() => setNeedsGesture(true));
     } else {
       cooldown.current = 0;
-      if (target > 0.5) p.seek(target);
+      if (!live && target > 0.5) { p.seek(target); noteJump(guest.current, Date.now()); }
       if (pb.playing) { playTry.current = Date.now(); tryPlay(p); }
     }
   }, [isHost, conn.clockRef, playerRef, tryPlay]);
@@ -132,6 +135,7 @@ export function usePlaybackSync({ room, isHost, conn, playerRef, ident }) {
   useEffect(() => {
     lastPubRef.current = null;
     cooldown.current = 0;
+    guest.current = createGuestSync(guest.current);
     playTry.current = 0;
     setNeedsGesture(false);
     setStats((s) => ({ ...s, buffering: false }));
@@ -158,38 +162,41 @@ export function usePlaybackSync({ room, isHost, conn, playerRef, ident }) {
       const base = rateOf(pb);
       const target = expectedPosition(pb, offset);
       const t = p.getTime();
+      const live = !!p.isLive?.();
       if (!pb.playing) {
         if (!p.isPaused()) p.pause();
-        if (Math.abs(t - target) > 0.5 && now > cooldown.current) {
+        if (!live && Math.abs(t - target) > 0.5 && now > cooldown.current) {
           p.seek(target);
           cooldown.current = now + 1500;
         }
-        p.setRate(base);
-        setStats((s) => ({ ...s, drift: t - target }));
+        if (!live) p.setRate(base);
+        setStats((s) => ({ ...s, drift: live ? null : t - target }));
         return;
       }
       if (p.isPaused()) {
         if (now - playTry.current > 2500) {
           playTry.current = now;
-          if (Math.abs(t - target) > 0.5) p.seek(target);
+          if (!live && Math.abs(t - target) > 0.5) { p.seek(target); noteJump(guest.current, now); }
           tryPlay(p);
         }
         return;
       }
-      if (p.isBuffering()) return;
-      const drift = t - target;
-      if (Math.abs(drift) > DRIFT_SEEK_S && now > cooldown.current) {
-        p.setRate(base);
-        p.seek(target + 0.15 * base);
-        cooldown.current = now + 3000;
-        corrections.current += 1;
-        push({ event: "correction", drift });
-      } else if (p.supportsRate && Math.abs(drift) > RATE_BAND_S && Math.abs(drift) <= DRIFT_SEEK_S) {
-        p.setRate(base * Math.min(1.05, Math.max(0.95, 1 - drift * 0.1)));
-      } else {
-        p.setRate(base);
+      if (live) {
+        // Live: hls.js keeps every device at the same distance from the live edge; only play/pause are followed.
+        setStats((s) => (s.drift === null ? s : { ...s, drift: null }));
+        return;
       }
-      setStats((s) => ({ ...s, drift, corrections: corrections.current }));
+      const step = guestStep(guest.current, { now, t, target, base, buffering: p.isBuffering(), supportsRate: !!p.supportsRate });
+      if (step.seek != null) {
+        p.setRate(base);
+        p.seek(step.seek);
+        corrections.current += 1;
+        push({ event: "correction", drift: step.drift, level: step.level });
+      } else if (step.rate != null) {
+        p.setRate(step.rate);
+      }
+      if (step.drift == null) return;
+      setStats((s) => ({ ...s, drift: step.drift, corrections: corrections.current }));
     }, isHost ? 1000 : 500);
     return () => clearInterval(id);
   }, [mediaId, caps.sync, isHost, conn.clockRef, playerRef, publish, push, tryPlay]);
@@ -239,7 +246,7 @@ export function usePlaybackSync({ room, isHost, conn, playerRef, ident }) {
     const s = setInterval(() => {
       const p = playerRef.current;
       const r = roomRef.current;
-      if (!p?.ready || !r?.playback?.playing || p.isBuffering() || caps.sync === false) return;
+      if (!p?.ready || !r?.playback?.playing || p.isBuffering() || p.isLive?.() || caps.sync === false) return;
       const { offset, rtt } = conn.clockRef.current;
       const drift = p.getTime() - expectedPosition(r.playback, offset);
       push({ event: "sample", drift, rtt: rtt ?? undefined, offset, position: p.getTime() });
@@ -278,7 +285,10 @@ export function usePlaybackSync({ room, isHost, conn, playerRef, ident }) {
     if (!p) return;
     const r = roomRef.current;
     setMuted(false);
-    p.seek(expectedPosition(r.playback, conn.clockRef.current.offset));
+    if (!p.isLive?.()) {
+      p.seek(expectedPosition(r.playback, conn.clockRef.current.offset));
+      noteJump(guest.current, Date.now());
+    }
     p.play().then(() => setNeedsGesture(false)).catch(() => setNeedsGesture(true));
   }, [playerRef, conn.clockRef, setMuted]);
 

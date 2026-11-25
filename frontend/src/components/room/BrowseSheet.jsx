@@ -14,6 +14,9 @@ const isDomain = (s) => /^[\w-]+(\.[\w-]+)+(\/\S*)?$/.test(s);
 const siteHome = (domain) => `https://${domain === "youtube.com" ? "www.youtube.com" : domain}`;
 // Sites whose page address is not enough: the room needs the address of the video file itself (the app finds it alone).
 const FILE_LINK_SITES = new Set(["archive.org"]);
+// Sites where only the app's browser can find the video (the file their page plays, see the app's BrowserModal): a web
+// page cannot look inside another site, so they are not offered here.
+const APP_ONLY_SITES = new Set(["x.com", "kick.com", "dailymotion.com", "reddit.com", "rumble.com", "odysee.com", "streamable.com"]);
 const FOCUSABLE = 'a[href],button:not([disabled]),input:not([disabled]),[tabindex]:not([tabindex="-1"])';
 
 function parts(url) {
@@ -49,7 +52,7 @@ export function BrowseSheet({ onClose, onBring }) {
   const t = useT();
   const cfg = useAppConfig();
   // Drive files are not browsed: their share link is pasted and the server imports the file.
-  const sites = cfg.allowed_sites.filter((s) => s.domain !== "drive.google.com");
+  const sites = cfg.allowed_sites.filter((s) => s.domain !== "drive.google.com" && !APP_ONLY_SITES.has(s.domain));
   const [step, setStep] = useState("sites"); // "sites" → "link"
   const [site, setSite] = useState(null); // {name, url, file}: what was opened in the other tab
   const [q, setQ] = useState("");

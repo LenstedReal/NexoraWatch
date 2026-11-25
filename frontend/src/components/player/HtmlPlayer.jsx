@@ -39,6 +39,9 @@ export const HtmlPlayer = ({ video, ident, playerRef, events, onFatal, onMedia }
     let hls;
     let ready = false;
     let disposed = false;
+    let live = false; // a live HLS stream (no end): the sync follows play/pause only, see usePlaybackSync
+    let recovers = 0;
+    let recoverAt = 0;
     const stalled = () => !el.ended && el.readyState < 3 && (!el.paused || el.readyState < 1);
     const tick = setInterval(() => setBuf(stalled()), 250);
     playerRef.current = {
@@ -47,6 +50,7 @@ export const HtmlPlayer = ({ video, ident, playerRef, events, onFatal, onMedia }
       getDuration: () => el.duration,
       isPaused: () => el.paused,
       isBuffering: () => stalled(),
+      isLive: () => live || el.duration === Infinity,
       play: () => el.play(),
       pause: () => el.pause(),
       seek: (s) => { if (Number.isFinite(s)) el.currentTime = s; },
@@ -75,12 +79,24 @@ export const HtmlPlayer = ({ video, ident, playerRef, events, onFatal, onMedia }
     const nativeHls = el.canPlayType("application/vnd.apple.mpegurl");
     if (video.kind === "hls" && Hls.isSupported()) {
       // Phone-friendly limits: never fetch a rendition larger than the player, keep about half a minute ahead and behind.
-      hls = new Hls({ enableWorker: true, lowLatencyMode: false, capLevelToPlayerSize: true, maxBufferLength: 30, maxMaxBufferLength: 60, backBufferLength: 30 });
+      // Live streams: up to 5 % faster while behind the target distance from the live edge, so every device in the
+      // room settles at the same delay.
+      hls = new Hls({ enableWorker: true, lowLatencyMode: false, capLevelToPlayerSize: true, maxBufferLength: 30, maxMaxBufferLength: 60, backBufferLength: 30, maxLiveSyncPlaybackRate: 1.05 });
+      hls.on(Hls.Events.LEVEL_LOADED, (_e, d) => { if (d?.details?.live) live = true; });
       hls.on(Hls.Events.ERROR, (_e, d) => {
         if (!d.fatal) return;
         evRef.current.onError?.();
-        if (d.type === Hls.ErrorTypes.MEDIA_ERROR) hls.recoverMediaError();
-        else onFatal(d.details?.includes("manifest") ? "manifest_invalid" : "network");
+        if (d.type === Hls.ErrorTypes.MEDIA_ERROR) {
+          // hls.js' own recipe: recover, then recover with the audio codec swapped, then give up. Recovering without a
+          // limit froze the picture again and again on phones whose decoder cannot take the stream.
+          const now = Date.now();
+          if (now - recoverAt > 30000) recovers = 0;
+          recoverAt = now;
+          recovers += 1;
+          if (recovers === 1) hls.recoverMediaError();
+          else if (recovers === 2) { hls.swapAudioCodec(); hls.recoverMediaError(); }
+          else onFatal("decode");
+        } else onFatal(d.details?.includes("manifest") ? "manifest_invalid" : "network");
       });
       hls.loadSource(src);
       hls.attachMedia(el);

@@ -55,13 +55,15 @@ MIN_AGE = int(os.environ.get("MIN_AGE", "16"))
 OWNER_NAME = os.environ.get("OWNER_NAME", "").strip()
 OWNER_ADDRESS = os.environ.get("OWNER_ADDRESS", "").strip()
 
-# Sites offered in the app (official players only): YouTube, TikTok, Instagram, X, Facebook, Twitch, Kick and Drive.
-# Vimeo and Internet Archive links still play when pasted; they are just not offered (little used in Turkey).
-# Override with ALLOWED_SITES in .env ("domain|Name,...").
-_DEFAULT_SITES = ("youtube.com|YouTube,tiktok.com|TikTok,facebook.com|Facebook,"
-                  "twitch.tv|Twitch,drive.google.com|Google Drive")
-# Accepted as source pages too, but not listed: twitter.com (old X addresses) and the sites dropped from the list.
-QUIET_SITES = [h.strip().lower().lstrip(".") for h in (os.environ.get("QUIET_SITES") or "twitter.com,vimeo.com,archive.org").split(",") if h.strip()]
+# Sites offered in the app's browser. YouTube, TikTok, Facebook, Twitch (past broadcasts) and Vimeo play in their
+# official players; on the others the app finds the video the page plays (MP4/HLS) and the room plays that file in
+# Nexora's own player, in sync. A found file that other devices cannot open is refused (resolver: source_locked).
+# Drive files are added by their share link. Override with ALLOWED_SITES in .env ("domain|Name,...").
+_DEFAULT_SITES = ("youtube.com|YouTube,tiktok.com|TikTok,x.com|X,facebook.com|Facebook,kick.com|Kick,twitch.tv|Twitch,"
+                  "vimeo.com|Vimeo,dailymotion.com|Dailymotion,reddit.com|Reddit,rumble.com|Rumble,odysee.com|Odysee,"
+                  "streamable.com|Streamable,archive.org|Internet Archive,drive.google.com|Google Drive")
+# Accepted as source pages too, but not listed: twitter.com (old X addresses).
+QUIET_SITES = [h.strip().lower().lstrip(".") for h in (os.environ.get("QUIET_SITES") or "twitter.com").split(",") if h.strip()]
 ALLOWED_SITES: list[dict] = []
 for _item in (os.environ.get("ALLOWED_SITES") or _DEFAULT_SITES).split(","):
     _dom, _, _name = _item.strip().partition("|")
