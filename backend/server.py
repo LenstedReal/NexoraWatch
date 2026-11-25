@@ -11,7 +11,7 @@ from starlette.middleware.cors import CORSMiddleware
 
 import rooms as R
 import room_queue as Q
-from config import CORS_ORIGINS, HOST_HANDOVER_S, ROOM_PURGE_GRACE_S
+from config import CORS_ORIGINS, HOST_HANDOVER_S, ROOM_PURGE_GRACE_S, WRITE_LIMIT_PER_MIN
 from db import db, ensure_indexes
 from hub import hub
 from policy import check_source, public_config
@@ -26,7 +26,7 @@ log = logging.getLogger("nexora")
 
 app = FastAPI(title="Nexora Watch API")
 app.add_middleware(CORSMiddleware, allow_credentials=False, allow_origins=CORS_ORIGINS, allow_methods=["*"], allow_headers=["*"])
-write_limiter = RateLimiter(120, 60)
+write_limiter = RateLimiter(WRITE_LIMIT_PER_MIN, 60)
 read_limiter = RateLimiter(60, 60)  # per IP, for public listings
 metrics_limiter = RateLimiter(12, 60)  # per participant; telemetry must not use up the shared per-IP budget
 

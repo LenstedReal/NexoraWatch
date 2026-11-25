@@ -24,6 +24,9 @@ jobs:
       DB_NAME: nexora_ci
       MEDIA_DIR: ${{ github.workspace }}/backend/data/media
       HOST_HANDOVER_SECONDS: "1"
+      # The suite sends a few hundred writes from 127.0.0.1 in seconds; the server's 120/min per address would answer
+      # the later tests with 429 (rate_limited) instead of testing them.
+      WRITE_LIMIT_PER_MIN: "100000"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5

@@ -11,6 +11,9 @@ log = logging.getLogger("nexora.config")
 MONGO_URL = os.environ.get("MONGO_URL", "mongodb://localhost:27017")
 DB_NAME = os.environ.get("DB_NAME", "nexora")
 CORS_ORIGINS = [o.strip() for o in os.environ.get("CORS_ORIGINS", "*").split(",") if o.strip()]
+# POST/PUT/DELETE requests one address may send per minute (server.py). Leave it at 120 on the server; CI raises it,
+# because the whole API test suite runs from a single address in a few seconds.
+WRITE_LIMIT_PER_MIN = int(os.environ.get("WRITE_LIMIT_PER_MIN", "120"))
 
 MEDIA_SIGNING_SECRET = os.environ.get("MEDIA_SIGNING_SECRET", "")
 if not MEDIA_SIGNING_SECRET:

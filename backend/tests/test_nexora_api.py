@@ -149,7 +149,8 @@ def test_resolve_youtube():
 
 def test_resolve_with_referer_and_title():
     r = requests.post(f"{API}/resolve", json={"url": "https://youtu.be/aqz-KE-bpKQ", "referer": "https://m.youtube.com/watch?v=aqz-KE-bpKQ", "title": "Bunny"})
-    assert r.status_code == 200 and r.json()["kind"] == "youtube" and r.json()["title"] == "Bunny"
+    # Online the official oEmbed title wins ("Big Buck Bunny 60fps 4K - …"); offline the page title the app sent.
+    assert r.status_code == 200 and r.json()["kind"] == "youtube" and "Bunny" in r.json()["title"], r.text
     assert "headers" not in r.json()
 
 
