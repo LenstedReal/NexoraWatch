@@ -1,4 +1,9 @@
-# Abonelik servisleri uygulamada (Beta)
+# Abonelik servisleri uygulamada (Beta, 1.8.3'ten beri kapalı)
+
+> **Durum (25 Kasım 2026, 1.8.3):** Nexora DRM korumalı / abonelikli platform sunmuyor. `SERVICES_ENABLED`
+> varsayılanı `0`: Netflix, Disney+, Prime Video ve HBO Max bağlantıları diğer abonelik platformları gibi
+> `drm_not_allowed` ile reddedilir; uygulama ve sitede bu servisler hiçbir yerde görünmez. Aşağıdaki anlatım kodun
+> nasıl çalıştığını kayıt için tutar; açmak için sunucuda `SERVICES_ENABLED=1` gerekir (önerilmez).
 
 Netflix, Disney+, Prime Video ve HBO Max (Max) **yalnızca Nexora mobil uygulamasında**, herkesin **kendi hesabıyla**
 izlenir. Nexora görüntüye dokunmaz; sadece oynat / durdur / sar komutlarını odadaki kişiler arasında eşitler

@@ -15,19 +15,28 @@ export function postNative(msg) {
   }
 }
 
-/** Opens the native site browser; resolves with {url, referer, title} or null when the user closes it. */
-export function pickFromNativeBrowser() {
-  return new Promise((resolve) => {
-    const prev = window.__nexoraPick;
-    window.__nexoraPick = (res) => {
-      window.__nexoraPick = prev;
-      resolve(res && res.url ? res : null);
-    };
-    if (!postNative({ type: "open_browser" })) {
-      window.__nexoraPick = prev;
-      resolve(null);
-    }
-  });
+/** Opens the app's site browser. What the person picks there arrives through onNativePick. */
+export const openNativeBrowser = () => postNative({ type: "open_browser", room: window.location.pathname });
+
+/**
+ * Calls `fn({url, referer, title})` for every video picked in the app's site browser. The room listens for as long as
+ * it is open, not only while a button waits: a heavy site can make Android reload this page while the browser is on
+ * top, and the pick made afterwards must still reach the room. "pick_ready" asks the app for a pick it could not
+ * deliver, "pick_ack" tells it that one arrived (app 1.8.1+; older apps ignore both and simply call the function).
+ * A pick made for another room (the person moved on meanwhile) is dropped.
+ */
+export function onNativePick(fn) {
+  if (!inApp()) return () => {};
+  const here = () => window.location.pathname.toUpperCase();
+  const mine = (res) => {
+    postNative({ type: "pick_ack" });
+    if (!res || !res.url) return;
+    if (typeof res.room === "string" && res.room && res.room.toUpperCase() !== here()) return;
+    fn(res);
+  };
+  window.__nexoraPick = mine;
+  postNative({ type: "pick_ready", room: window.location.pathname });
+  return () => { if (window.__nexoraPick === mine) window.__nexoraPick = undefined; };
 }
 
 /**

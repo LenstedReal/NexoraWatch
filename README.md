@@ -11,17 +11,16 @@ Arkadaşlarınla aynı videoyu **aynı anda** izlediğin, Rave benzeri birlikte 
 | Kaynak | Nasıl | Eşitleme |
 |---|---|---|
 | YouTube (video, Shorts) | resmî oynatıcı | var |
-| TikTok | resmî gömme oynatıcı | var |
+| TikTok | resmî gömme oynatıcı; uygulamanın tarayıcısı akıştaki videoları da bulur | var |
+| X | gönderinin video dosyası: sunucu adresi X'in gömme verisinden bulur, video telefonlara X'ten gelir | var |
 | Facebook videoları | resmî oynatıcı (JS SDK) | var |
-| Twitch kayıtlı yayınları | resmî oynatıcı | var |
-| Vimeo | resmî oynatıcı | var |
-| X, Kick, Reddit, Dailymotion, Rumble, Odysee, Streamable | uygulamanın tarayıcısı sayfanın oynattığı MP4/HLS dosyasını bulur, kendi oynatıcımız oynatır | var (canlı yayınlarda herkes canlı uca kilitlenir) |
-| Internet Archive | sayfa ya da dosya bağlantısı | var |
+| Twitch | resmî oynatıcı: kayıtlı yayınlar ve canlı yayınlar | kayıtlarda tam; canlıda herkes canlıyı izler, oynat/durdur eşit |
+| Kick | canlı yayın, kayıt, klip: Kick'in kendi oynatıcısının aldığı HLS, kendi oynatıcımızda | kayıtlarda tam; canlıda herkes aynı gecikmeyle canlıda, oynat/durdur eşit |
+| Reddit | gönderinin Reddit HLS videosu, kendi oynatıcımızda | var |
 | Google Drive | herkese açık dosya içe aktarılır | var |
 | MP4 / M3U8 bağlantısı, telefondan yüklenen video | kendi oynatıcımız (kalite, altyazı, sıra) | var |
-| Netflix, Disney+, Prime Video, HBO Max (beta) | yalnızca uygulamada, herkes kendi hesabıyla | var, bkz. `docs/SERVICES.md` |
 
-Bulunan bir dosyayı odadaki diğer cihazlar açamıyorsa (siteye kilitli adres, CORS izni yok) sunucu onu baştan reddeder (`source_locked`); oda bozulmaz. X ve Kick bağlantısı yapıştırılınca eşitlenemez, uygulamadaki "Sitelerde gez ve video bul" ile açılır (`find_in_app`). Instagram ve Twitch canlı yayınları eşitlenemediği için desteklenmez. Dropbox bağlantıları yapıştırılınca çalışır. Resmî oynatıcıların üstüne hiçbir şey çizilmez; başlık ve düğmeler oynatıcının altındaki çubuktadır.
+Liste sitede ve uygulamada birebir aynıdır. Kick ve Reddit bağlantılarını sunucu çözer; bu iki site sunucumuzu engellerse (Kick'in bot denetimi, Reddit'in sunucu kısıtı) video uygulamanın tarayıcısıyla eklenir ve eklenince sitedekiler de izler. Reddit API anahtarı artık alınamıyor (Reddit yeni başvuruları 31 Ekim 2026'da kapattı), sunucu gönderinin herkese açık verisini anahtarsız okur; ayrıntılar `docs/BEKLEYENLER.md`. Reddit'te canlı yayın yok (Reddit Kasım 2022'de kapattı). Yoklar: Instagram (oynatıcısı kontrol edilemiyor, dosyaları yalnızca instagram.com'da açılıyor; videoyu sunucudan geçirmek Instagram kurallarına aykırı), DRM/abonelik platformları (Netflix, Disney+, Prime Video, HBO Max: 1.8.3'ten beri kapalı, `SERVICES_ENABLED`). Dailymotion resmî oynatıcısını bekliyor (`docs/BEKLEYENLER.md`). Vimeo, Internet Archive ve Dropbox bağlantıları yapıştırılınca çalışır, listede gösterilmez. Resmî oynatıcıların üstüne hiçbir şey çizilmez; başlık ve düğmeler oynatıcının altındaki çubuktadır.
 
 ## Repo yapısı
 

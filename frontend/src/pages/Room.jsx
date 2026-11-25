@@ -9,7 +9,9 @@ import { useRoomConnection } from "@/hooks/useRoomConnection";
 import { usePlaybackSync } from "@/hooks/usePlaybackSync";
 import { useUpload } from "@/hooks/useUpload";
 import { useDriveImport } from "@/hooks/useDriveImport";
+import { useNativePick } from "@/hooks/useNativePick";
 import { Stage } from "@/components/player/Stage";
+import { PlayerBoundary } from "@/components/player/PlayerBoundary";
 import { TopBar } from "@/components/room/TopBar";
 import { ConnectionBanner } from "@/components/room/ConnectionBanner";
 import { SourcePanel } from "@/components/room/SourcePanel";
@@ -113,6 +115,7 @@ function RoomView({ code, ident, initialRoom, onIdentLost }) {
   const sync = usePlaybackSync({ room, isHost, conn, playerRef, ident });
   useQueueAutoNext({ code, ident, isHost, room, playerRef, onRoom: conn.setRoom }); // feat worker
   const upload = useUpload({ code, ident });
+  const pick = useNativePick({ code, ident, isHost, onRoom: conn.setRoom });
   useBackgroundNotify({ t, room, messages: conn.messages, me: ident.participant_id }); // rooms worker
   const msgCount = conn.messages.length;
   const tabRef = useRef(tab);
@@ -136,7 +139,10 @@ function RoomView({ code, ident, initialRoom, onIdentLost }) {
   const switchTab = (k) => { setTab(k); if (k === "chat") setUnread(0); };
 
   if (GATE_KEYS[conn.status] && !closing.current) return <Gate title={t(GATE_KEYS[conn.status])} />;
-  if (conn.status === "replaced") return <Gate title={t("replaced")} />;
+  // Opened with the same seat in another tab or device: this one waits, and one tap brings the room back here.
+  if (conn.status === "replaced") {
+    return <Gate title={t("replaced")}><button className="go" onClick={conn.retryNow} data-testid="room-continue-here-btn">{t("replaced_here")}</button></Gate>;
+  }
 
   const send = (v) => conn.sendChat(v).catch((e) => toast.error(errorText(t, e)));
   const report = (person, messageId) => setReporting({ person, messageId });
@@ -207,7 +213,7 @@ function RoomView({ code, ident, initialRoom, onIdentLost }) {
     },
   });
   const queue = <QueuePanel code={code} ident={ident} queue={room.queue} isHost={isHost} onRoom={conn.setRoom} />; // feat worker
-  const source = isHost ? <><SourcePanel code={code} ident={ident} video={room.video} upload={upload} drive={drive} onRoom={conn.setRoom} /><SubtitlePanel code={code} ident={ident} video={room.video} onRoom={conn.setRoom} /></> : null;
+  const source = isHost ? <><SourcePanel code={code} ident={ident} video={room.video} upload={upload} drive={drive} pick={pick} onRoom={conn.setRoom} /><SubtitlePanel code={code} ident={ident} video={room.video} onRoom={conn.setRoom} /></> : null;
 
   return (
     <div className="room" data-testid="room-page">
@@ -216,7 +222,9 @@ function RoomView({ code, ident, initialRoom, onIdentLost }) {
       <ConnectionBanner status={conn.status} attempt={conn.attempt} onRetry={conn.retryNow} />
       <div className="body">
         <section className="main">
-          <Stage video={room.video} playback={room.playback} isHost={isHost} ident={ident} playerRef={playerRef} sync={sync} onAddVideo={() => switchTab("video")} onPlainEmbed={setPlainEmbed} />
+          <PlayerBoundary resetKey={room.video?.media_id || "none"} title={t("player_error")} retry={t("retry")}>
+            <Stage video={room.video} playback={room.playback} isHost={isHost} ident={ident} playerRef={playerRef} sync={sync} onAddVideo={() => switchTab("video")} onPlainEmbed={setPlainEmbed} />
+          </PlayerBoundary>
           {room.video && (room.video.capabilities?.sync === false || plainEmbed) && <div className="hint">{t("no_sync")}</div>}
           {source && <div className="desk-only">{source}</div>}
           <div className="desk-only">{queue}</div>

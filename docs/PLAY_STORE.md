@@ -13,14 +13,14 @@ Paket adı: `com.lenstedreal.nexorawatch` · Hedef kitle: 16+ · Reklam: var (In
 > izlersin. Bir oda kur, kodu ya da bağlantıyı paylaş;
 > herkes tek dokunuşla katılır. Odayı kuran kişi oynatır, durdurur ve ileri sarar, herkesin ekranı otomatik eşitlenir.
 >
-> • YouTube, TikTok, Facebook, Twitch kayıtları, Vimeo, Google Drive ve video bağlantılarını yapıştır
-> • Uygulamadaki tarayıcıyla X, Kick, Reddit, Dailymotion gibi sitelerde videoyu bul, odaya getir
+> • YouTube, TikTok, X, Facebook, Reddit, Twitch ve Kick (canlı yayınlar dahil), Google Drive ve video bağlantılarını yapıştır
+> • Uygulamadaki tarayıcıyla bu sitelerde gez, videoyu ya da yayını tek dokunuşla odaya getir
 > • Kendi videonu yükle (7 gün sonra otomatik silinir)
 > • Oda sohbeti, izleme sırası ve oylama, altyazı (.srt / .vtt)
 > • Hesap gerekmez: sadece bir takma ad seç
 > • Türkçe, İngilizce ve Almanca
 >
-> YouTube, TikTok, Facebook, Twitch ve Vimeo kendi resmî oynatıcısıyla oynatılır. Uygunsuz içeriği oda içinden şikâyet edebilirsin.
+> YouTube, TikTok, Facebook ve Twitch kendi resmî oynatıcısıyla oynatılır. Uygunsuz içeriği oda içinden şikâyet edebilirsin.
 
 ### English
 **Short description (≤ 80 chars):**
@@ -31,14 +31,14 @@ Paket adı: `com.lenstedreal.nexorawatch` · Hedef kitle: 16+ · Reklam: var (In
 > video at the same second. Create a room, share the code or
 > link, and everyone joins with one tap. The host plays, pauses and seeks; every screen stays in sync automatically.
 >
-> • Paste links from YouTube, TikTok, Facebook, Twitch past broadcasts, Vimeo, Google Drive and video links
-> • Find videos on sites like X, Kick, Reddit and Dailymotion with the in-app browser and bring them to the room
+> • Paste links from YouTube, TikTok, X, Facebook, Reddit, Twitch and Kick (live streams included), Google Drive and video links
+> • Browse these sites in the app and bring a video or a live stream to the room with one tap
 > • Upload your own video (deleted automatically after 7 days)
 > • Room chat, watch queue with voting, subtitles (.srt / .vtt)
 > • No account needed: just pick a nickname
 > • Turkish, English and German
 >
-> YouTube, TikTok, Facebook, Twitch and Vimeo play in their own official players. You can report inappropriate content from inside the room.
+> YouTube, TikTok, Facebook and Twitch play in their own official players. You can report inappropriate content from inside the room.
 
 Kontrol: kısa açıklamalar 80 karakterin altında (TR 73, EN 74). Ekran görüntüleri: en az 2 telefon görüntüsü
 (oda ekranı, sohbet), 512×512 simge, 1024×500 öne çıkan görsel.

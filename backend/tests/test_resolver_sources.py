@@ -5,6 +5,7 @@ import os
 import sys
 
 import pytest
+from urllib.parse import urlparse
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 
@@ -32,7 +33,11 @@ def oembed(monkeypatch):
     async def fake(url):
         seen.append(url)
         return "7300000000000000001" if "good" in url else None
+
+    async def no_redirect(url):  # the second way (the short link's redirect) is tested on its own; no network here
+        return None
     monkeypatch.setattr(resolver, "_tiktok_oembed", fake)
+    monkeypatch.setattr(resolver, "_tiktok_redirect", no_redirect)
     return seen
 
 
@@ -76,8 +81,10 @@ def test_tiktok_non_video_pages():
     ("https://www.instagram.com/p/C9xYz12AbCd/embed/captioned/", "https://www.instagram.com/p/C9xYz12AbCd/embed/"),
 ])
 def test_instagram(url, embed):
-    # 1.6.2: Instagram embeds cannot play in sync for everyone, so the link is refused with a clear reason
+    # Instagram's embed has no JavaScript control and its files are locked to Instagram: it cannot play in sync for
+    # everyone, so the link is refused with a clear reason (1.6.2, confirmed 1.8.1: nothing is offered "without sync")
     assert code_of(url) == "no_sync_source"
+    assert resolver._instagram(url, resolver.urlparse(url))["embed_url"] == embed  # still recognised
 
 
 def test_instagram_profile_is_a_clear_error():
@@ -92,9 +99,220 @@ def test_instagram_profile_is_a_clear_error():
     "https://x.com/i/web/status/1790000000000000000",
     "https://platform.twitter.com/embed/Tweet.html?id=1790000000000000000",
 ])
-def test_x(url):
-    # 1.6.2: X embeds cannot play in sync, refused; 1.8.0: with the way that works (the app's browser finds the file)
-    assert code_of(url) == "find_in_app"
+def test_x(url, xnet):
+    # 1.8.2: a pasted X post plays its video file in Nexora's own player, in sync, on the web and in the app alike
+    v = resolve(url)
+    assert (v["kind"], v["video_id"], v["provider"], v["capabilities"]) == ("direct", "1790000000000000000", "x", resolver.FULL_CAPS)
+    assert v["stream_url"] == "https://video.twimg.com/ext_tw_video/1/pu/vid/avc1/1280x720/b.mp4?tag=12"
+    assert v["url"] == "https://x.com/i/status/1790000000000000000" and v["title"] == "Launch day"
+    assert xnet["fetched"] == ["1790000000000000000"]
+
+
+def test_twitch_live_channels_play_live_for_everyone():
+    # 1.8.3: everyone watches the channel live in Twitch's player; the room follows play / pause (no seeking live)
+    t = resolve("https://m.twitch.tv/SomeChannel")
+    assert (t["kind"], t["channel"], t["live"], t["capabilities"]) == ("twitch", "somechannel", True, resolver.LIVE_SYNC_CAPS)
+    assert t["capabilities"]["sync"] is True and t["capabilities"]["seek"] is False
+    assert code_of("https://www.twitch.tv/somechannel/clip/FunnyClip-abc") == "twitch_clip"
+    assert resolve("https://www.twitch.tv/videos/2301234567")["capabilities"] == SYNC  # past broadcasts: in sync
+
+
+@pytest.fixture
+def kicknet(monkeypatch):
+    """Kick's site API and the IVS / Kick CDN files, faked. api[path] = (status, JSON)."""
+    calls = []
+    api = {
+        "/api/v2/channels/somestreamer": (200, {"user": {"username": "SomeStreamer"}, "livestream": {"session_title": "Gece yayını"},
+                                                "playback_url": "https://abc.us-west-2.playback.live-video.net/api/video/v1/us-west-2.1.channel.x.m3u8"}),
+        "/api/v2/channels/sleepy": (200, {"user": {"username": "sleepy"}, "livestream": None,
+                                          "playback_url": "https://abc.us-west-2.playback.live-video.net/api/video/v1/us-west-2.1.channel.y.m3u8"}),
+        "/api/v1/video/0f3a1b2c-1111-2222-3333-444455556666": (200, {"source": "https://stream.kick.com/ivs/v1/1/2026/11/20/x/media/hls/master.m3u8",
+                                                                     "livestream": {"session_title": "Dünkü yayın"}}),
+        "/api/v2/clips/clip_01JABCDEFGHIJ": (200, {"clip": {"title": "Gol!", "clip_url": "https://clips.kick.com/clips/ab/clip_01JABCDEFGHIJ/playlist.m3u8"}}),
+    }
+
+    async def fetch(path):
+        calls.append(path)
+        a = api.get(path, (404, None))
+        if isinstance(a, Exception):
+            raise a
+        return a
+
+    async def public(host):
+        return None
+
+    async def probe(url, referer=None, origin=None, ranged=True):
+        headers = {"content-type": "application/vnd.apple.mpegurl", "access-control-allow-origin": "*"}
+        return {"status": 200, "ctype": headers["content-type"], "headers": headers, "head": b"#EXTM3U\n#EXT-X-VERSION:3\n", "final_url": url}
+    monkeypatch.setattr(resolver, "kick_fetch", fetch)
+    monkeypatch.setattr(resolver, "_assert_public", public)
+    monkeypatch.setattr(resolver, "_probe", probe)
+    return {"calls": calls, "api": api}
+
+
+def test_kick_live_channel_recording_and_clip(kicknet):
+    live = resolve("https://kick.com/SomeStreamer")
+    assert (live["kind"], live["provider"], live["live"], live["title"]) == ("hls", "kick", True, "Gece yayını")
+    assert live["stream_url"].endswith(".channel.x.m3u8") and live["capabilities"]["sync"] is True
+    assert resolve("https://player.kick.com/somestreamer")["live"] is True  # Kick's embed address works too
+    vod = resolve("https://kick.com/somestreamer/videos/0f3a1b2c-1111-2222-3333-444455556666")
+    assert (vod["kind"], vod["live"], vod["title"]) == ("hls", False, "Dünkü yayın") and vod["stream_url"].endswith("/hls/master.m3u8")
+    for url in ("https://kick.com/somestreamer?clip=clip_01JABCDEFGHIJ", "https://kick.com/somestreamer/clips/clip_01JABCDEFGHIJ"):
+        c = resolve(url)
+        assert (c["kind"], c["live"], c["title"]) == ("hls", False, "Gol!"), url
+
+
+def test_kick_offline_missing_and_refused(kicknet):
+    assert code_of("https://kick.com/sleepy") == "kick_offline"
+    assert code_of("https://kick.com/nobody123") == "not_found"
+    assert code_of("https://kick.com/video/0f3a1b2c-9999-2222-3333-444455556666") == "not_found"
+    kicknet["api"]["/api/v2/channels/walled"] = (403, None)  # Cloudflare's bot check on the server
+    assert code_of("https://kick.com/walled") == "kick_app_only"
+    kicknet["api"]["/api/v2/channels/down"] = OSError("offline")
+    assert code_of("https://kick.com/down") == "kick_app_only"
+    assert asyncio.run(resolver._kick("https://kick.com/browse", resolver.urlparse("https://kick.com/browse"))) is None
+
+
+@pytest.fixture
+def redditnet(monkeypatch):
+    posts = {}
+    calls = []
+
+    def post(pid, data):
+        posts[pid] = (200, [{"data": {"children": [{"data": data}]}}, {"data": {"children": []}}])
+
+    async def fetch(pid):
+        calls.append(pid)
+        a = posts.get(pid, (404, None))
+        if isinstance(a, Exception):
+            raise a
+        return a
+
+    async def public(host):
+        return None
+
+    async def probe(url, referer=None, origin=None, ranged=True):
+        headers = {"content-type": "application/vnd.apple.mpegurl", "access-control-allow-origin": "*"}
+        return {"status": 200, "ctype": headers["content-type"], "headers": headers, "head": b"#EXTM3U\n", "final_url": url}
+
+    async def share(url):
+        return "1abcde" if "good" in url else None
+    monkeypatch.setattr(resolver, "reddit_fetch", fetch)
+    monkeypatch.setattr(resolver, "_reddit_share", share)
+    monkeypatch.setattr(resolver, "_assert_public", public)
+    monkeypatch.setattr(resolver, "_probe", probe)
+    post("1abcde", {"title": "Kedi  uçtu", "secure_media": {"reddit_video": {"hls_url": "https://v.redd.it/k1/HLSPlaylist.m3u8?a=1&v=1&f=sd",
+                                                                                "fallback_url": "https://v.redd.it/k1/DASH_720.mp4"}}})
+    post("2crosx", {"title": "Paylaşım", "crosspost_parent_list": [{"title": "Asıl", "media": {"reddit_video": {"hls_url": "https://v.redd.it/k2/HLSPlaylist.m3u8"}}}]})
+    post("3textx", {"title": "Sadece yazı", "selftext": "..."})
+    post("4ytube", {"title": "YouTube", "secure_media": {"type": "youtube.com", "oembed": {}}})
+    return {"calls": calls, "posts": posts}
+
+
+def test_reddit_post_video(redditnet):
+    for url in ("https://www.reddit.com/r/aww/comments/1abcde/kedi_uctu/", "https://old.reddit.com/comments/1abcde",
+                "https://redd.it/1abcde", "https://www.reddit.com/r/aww/s/goodShare1"):
+        v = resolve(url)
+        assert (v["kind"], v["provider"], v["video_id"], v["title"]) == ("hls", "reddit", "1abcde", "Kedi uçtu"), url
+        assert v["stream_url"] == "https://v.redd.it/k1/HLSPlaylist.m3u8?a=1&v=1&f=sd" and v["capabilities"]["sync"] is True
+    assert resolve("https://www.reddit.com/r/videos/comments/2crosx/p/")["stream_url"] == "https://v.redd.it/k2/HLSPlaylist.m3u8"
+
+
+def test_reddit_errors(redditnet):
+    assert code_of("https://www.reddit.com/r/videos/comments/3textx/") == "reddit_no_video"
+    assert code_of("https://www.reddit.com/r/videos/comments/4ytube/") == "reddit_no_video"
+    assert code_of("https://www.reddit.com/r/videos/comments/9zzzzz/") == "not_found"
+    redditnet["posts"]["5block"] = (403, None)  # Reddit refusing the server
+    assert code_of("https://www.reddit.com/r/videos/comments/5block/") == "reddit_app_only"
+    redditnet["posts"]["6downx"] = OSError("offline")
+    assert code_of("https://www.reddit.com/r/videos/comments/6downx/") == "reddit_app_only"
+    assert code_of("https://www.reddit.com/r/aww/s/badShare99") == "reddit_share"
+    assert code_of("https://www.reddit.com/r/aww/") == "social_link"
+
+
+@pytest.fixture
+def xnet(monkeypatch):
+    """X's embed data and the video file, faked: posts[id] = (status, JSON); files answer like video.twimg.com."""
+    resolver._x_cache.clear()
+    posts = {"1790000000000000000": (200, {"__typename": "Tweet", "text": "Launch day https://t.co/AbC123",
+                                           "user": {"screen_name": "NASA"}, "mediaDetails": [{"type": "video", "video_info": {"variants": [
+                                               {"content_type": "application/x-mpegURL", "url": "https://video.twimg.com/ext_tw_video/1/pu/pl/b.m3u8?tag=12"},
+                                               {"bitrate": 256000, "content_type": "video/mp4", "url": "https://video.twimg.com/ext_tw_video/1/pu/vid/avc1/480x270/b.mp4?tag=12"},
+                                               {"bitrate": 2176000, "content_type": "video/mp4", "url": "https://video.twimg.com/ext_tw_video/1/pu/vid/avc1/1280x720/b.mp4?tag=12"},
+                                               {"bitrate": 10368000, "content_type": "video/mp4", "url": "https://video.twimg.com/ext_tw_video/1/pu/vid/avc1/1920x1080/b.mp4?tag=12"}]}}]})}
+    state = {"fetched": [], "posts": posts, "file_headers": {}}
+
+    async def fetch(post_id):
+        state["fetched"].append(post_id)
+        a = posts.get(post_id, (404, None))
+        if isinstance(a, Exception):
+            raise a
+        return a
+
+    async def public(host):
+        return None
+
+    async def probe(url, referer=None, origin=None, ranged=True):
+        assert urlparse(url).hostname == "video.twimg.com", url
+        headers = {"content-type": "video/mp4", "accept-ranges": "bytes", "content-range": "bytes 0-2047/9000000",
+                   **(state["file_headers"] if origin else {})}
+        return {"status": 206, "ctype": "video/mp4", "headers": headers, "head": b"\x00\x00\x00\x18ftypmp42", "final_url": url}
+    monkeypatch.setattr(resolver, "x_fetch", fetch)
+    monkeypatch.setattr(resolver, "_assert_public", public)
+    monkeypatch.setattr(resolver, "_probe", probe)
+    yield state
+    resolver._x_cache.clear()
+
+
+def test_x_token_matches_the_embed_widget():
+    # react-tweet / X's widget: ((id / 1e15) * Math.PI).toString(36).replace(/(0+|\.)/g, ""), values from Node
+    for post_id, token in (("1790000000000000000", "4c7g8auqyik"), ("1874511148237172937", "4jky7sbj34"), ("20", "6dq1a2xwd93"),
+                           ("463440424141459456", "14fxvks611f"), ("1628832338187636740", "3y54libozsy")):
+        assert resolver.x_token(post_id) == token, post_id
+    assert resolver._js_radix(0.1) == "0.3lllllllllm" and resolver._js_radix(123.456) == "3f.gez4w97ry"
+    assert resolver._js_radix(35.99999999999999) == "z.zzzzzzzzz" and resolver._js_radix(1e21) == "5v1j4f4ds7c000"
+
+
+def test_x_quoted_video_newer_shape_and_bad_hosts(xnet):
+    xnet["posts"]["1700000000000000001"] = (200, {"text": "Look", "quoted_tweet": {"text": "Original clip", "video": {"variants": [
+        {"type": "application/x-mpegURL", "src": "https://video.twimg.com/amplify_video/9/pl/a.m3u8"},
+        {"type": "video/mp4", "src": "https://video.twimg.com/amplify_video/9/vid/avc1/720x1280/a.mp4"}]}}})
+    v = resolve("https://x.com/someone/status/1700000000000000001")
+    assert v["stream_url"] == "https://video.twimg.com/amplify_video/9/vid/avc1/720x1280/a.mp4" and v["title"] == "Original clip"
+    # a file anywhere but X's video host is never taken; only heavy files: the lightest one
+    assert resolver._x_pick([{"content_type": "video/mp4", "bitrate": 1, "url": "https://evil.example/a.mp4"}]) is None
+    assert resolver._x_pick([{"content_type": "video/mp4", "bitrate": 9e6, "url": "https://video.twimg.com/a.mp4"},
+                             {"content_type": "video/mp4", "bitrate": 5e6, "url": "https://video.twimg.com/b.mp4"}]) == "https://video.twimg.com/b.mp4"
+
+
+def test_x_errors_and_cache(xnet):
+    xnet["posts"]["1700000000000000002"] = (200, {"text": "Only words", "mediaDetails": [{"type": "photo"}]})
+    xnet["posts"]["1700000000000000003"] = (200, {"__typename": "TweetTombstone"})
+    xnet["posts"]["1700000000000000004"] = (500, None)
+    xnet["posts"]["1700000000000000005"] = OSError("offline")
+    assert code_of("https://x.com/a/status/1700000000000000002") == "x_no_video"
+    assert code_of("https://x.com/a/status/1700000000000000003") == "x_unavailable"
+    assert code_of("https://x.com/a/status/1799999999999999999") == "x_unavailable"  # 404
+    assert code_of("https://x.com/a/status/1700000000000000004") == "network"
+    assert code_of("https://x.com/a/status/1700000000000000005") == "network"
+    n = len(xnet["fetched"])
+    assert code_of("https://x.com/a/status/1700000000000000002") == "x_no_video"  # remembered
+    assert code_of("https://x.com/a/status/1700000000000000004") == "network"  # not remembered: tried again
+    assert xnet["fetched"][n:] == ["1700000000000000004"]
+    resolve("https://x.com/NASA/status/1790000000000000000")
+    resolve("https://twitter.com/NASA/status/1790000000000000000")
+    assert xnet["fetched"].count("1790000000000000000") == 1  # cached
+
+
+def test_x_file_locked_for_other_sites_is_refused(xnet):
+    xnet["file_headers"] = {"cross-origin-resource-policy": "same-site"}
+    assert code_of("https://x.com/NASA/status/1790000000000000000") == "source_locked"
+
+
+def test_x_keeps_its_own_text_over_the_page_title(xnet):
+    v = asyncio.run(resolver.resolve("https://x.com/NASA/status/1790000000000000000", "https://x.com/NASA/status/1790000000000000000",
+                                     'NASA on X: "Launch day" / X'))
+    assert v["title"] == "Launch day"
 
 
 def test_x_profile_is_a_clear_error():
@@ -131,15 +349,14 @@ def test_lists_offer_the_new_sites():
     doms = [s["domain"] for s in config.ALLOWED_SITES]
     if os.environ.get("ALLOWED_SITES"):
         pytest.skip("ALLOWED_SITES is set in the environment")
-    # official players and the sites whose video file the app's browser finds (1.8.0: the wide list is back)
-    for d in ("youtube.com", "tiktok.com", "facebook.com", "twitch.tv", "vimeo.com", "x.com", "kick.com", "dailymotion.com",
-              "reddit.com", "rumble.com", "odysee.com", "streamable.com", "archive.org", "drive.google.com"):
-        assert d in doms
-    for d in ("instagram.com", "bilibili.tv"):  # no sync (Instagram embed) / DASH only (Bilibili): not offered
-        assert d not in doms
-    # still accepted as a page picked in the app's browser
-    assert policy.is_allowed_site("old.reddit.com") and policy.is_allowed_site("www.twitter.com") and policy.is_allowed_site("vm.tiktok.com")
-    assert not policy.is_allowed_site("instagram.com")
+    # 1.8.3: the same list on the web and in the app; Kick (live too) and Reddit are back
+    assert doms == ["youtube.com", "tiktok.com", "x.com", "facebook.com", "twitch.tv", "kick.com", "reddit.com", "drive.google.com"]
+    # still accepted as pages (links pasted, or a page picked in the app's browser)
+    for h in ("www.twitter.com", "vm.tiktok.com", "old.reddit.com", "player.kick.com", "vimeo.com", "archive.org"):
+        assert policy.is_allowed_site(h), h
+    for h in ("instagram.com", "dailymotion.com", "rumble.com", "netflix.com"):  # no sync / waits / not offered / DRM
+        assert not policy.is_allowed_site(h), h
+    assert config.SERVICES_ENABLED is False or os.environ.get("SERVICES_ENABLED")  # 1.8.3: no DRM platforms
 
 
 # --- Files found by the app's browser must open on the room's other devices (1.8.0) ---------------------------------
@@ -157,13 +374,14 @@ def net(monkeypatch):
     async def probe(url, referer=None, origin=None, ranged=True):
         who = "room" if (origin or (referer or "").startswith(config.WEB_URL)) else "site"
         calls.append((who, url, ranged))
-        status, extra = answers[who]
+        status, extra = answers.get((who, url)) or answers[who]
         if isinstance(status, Exception):
             raise status
         hls = ".m3u8" in url
-        headers = {"content-type": "application/vnd.apple.mpegurl" if hls else "video/mp4", "accept-ranges": "bytes", **extra}
-        return {"status": status, "ctype": headers["content-type"], "headers": headers,
-                "head": b"#EXTM3U\n#EXT-X-VERSION:3\n" if hls else b"\x00\x00\x00\x18ftypmp42", "final_url": url}
+        headers = {"content-type": "application/vnd.apple.mpegurl" if hls else "video/mp4", "accept-ranges": "bytes",
+                   "content-range": "bytes 0-2047/5000000", **extra}
+        head = answers.get(("head", url)) or (b"#EXTM3U\n#EXT-X-VERSION:3\n" if hls else b"\x00\x00\x00\x18ftypmp42")
+        return {"status": status, "ctype": headers["content-type"], "headers": headers, "head": head, "final_url": url}
     monkeypatch.setattr(resolver, "_assert_public", public)
     monkeypatch.setattr(resolver, "_probe", probe)
     return {"calls": calls, "answers": answers, "origin": config.WEB_URL}
@@ -207,3 +425,86 @@ def test_pasted_files_are_not_asked_twice(net):
     net["answers"]["room"] = (403, {})
     assert asyncio.run(resolver.resolve("https://cdn.example.org/movie.mp4"))["kind"] == "direct"
     assert [c[0] for c in net["calls"]] == ["site"]
+
+
+def test_found_mp4_locked_by_cross_origin_resource_policy(net):
+    # Instagram-style CDN: the file opens on the site's own page only (CORP), so a <video> elsewhere is blocked
+    page, mp4 = "https://www.reddit.com/r/videos/comments/abc/x/", "https://cdn.example.net/v/clip.mp4"
+    for corp in ("same-origin", "same-site", "Same-Origin"):
+        net["answers"]["room"] = (206, {"cross-origin-resource-policy": corp})
+        assert locked(mp4, page) == "source_locked", corp
+    net["answers"]["room"] = (206, {"cross-origin-resource-policy": "cross-origin"})
+    assert found(mp4, page)["kind"] == "direct"
+
+
+def test_found_hls_checks_what_the_playlist_points_to(net):
+    page = "https://kick.com/somestreamer/videos/0f3a1b2c-1111-2222-3333-444455556666"
+    master = "https://stream.kick.com/ivs/v1/1/2026/11/20/x/media/hls/master.m3u8"
+    variant = "https://stream.kick.com/ivs/v1/1/2026/11/20/x/media/hls/720p30/playlist.m3u8"
+    net["answers"][("head", master)] = b"#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=2500000,RESOLUTION=1280x720\n720p30/playlist.m3u8\n"
+    net["answers"]["room"] = (200, {"access-control-allow-origin": "*"})
+    net["answers"][("room", variant)] = (200, {})  # the rendition is not open to us: hls.js would fail on it
+    assert locked(master, page) == "source_locked"
+    assert ("room", variant, False) in net["calls"]
+    net["answers"][("room", variant)] = (200, {"access-control-allow-origin": "*"})
+    assert found(master, page)["kind"] == "hls"
+
+
+def test_tiny_mp4_is_a_piece_not_a_video(net):
+    # an fMP4 init segment (X's HLS) looks like an .mp4 but has nothing to watch
+    page, init = "https://x.com/nasa/status/1", "https://video.twimg.com/ext_tw_video/1/pu/vid/avc1/720x1280/AbC.mp4"
+    net["answers"]["site"] = (206, {"content-range": "bytes 0-911/912"})
+    assert locked(init, page) == "too_small"
+    net["answers"]["site"] = (206, {"content-range": "bytes 0-2047/2400000"})
+    assert found(init, page)["kind"] == "direct"
+
+
+def test_tiktok_short_link_falls_back_to_its_redirect(monkeypatch):
+    async def no_oembed(url):
+        return None
+    seen = []
+
+    async def redirect(url):
+        seen.append(url)
+        return "7300000000000000002" if "good" in url else None
+    monkeypatch.setattr(resolver, "_tiktok_oembed", no_oembed)
+    monkeypatch.setattr(resolver, "_tiktok_redirect", redirect)
+    v = resolve("https://vm.tiktok.com/ZMgood999/")
+    assert (v["kind"], v["video_id"], v["capabilities"]) == ("tiktok", "7300000000000000002", SYNC)
+    assert code_of("https://vt.tiktok.com/ZSbad0002/") == "tiktok_short"
+    assert seen == ["https://vm.tiktok.com/ZMgood999/", "https://vt.tiktok.com/ZSbad0002/"]
+
+
+def test_tiktok_redirect_reads_only_the_location(monkeypatch):
+    class Resp:
+        def __init__(self, loc):
+            self.headers = {"location": loc}
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+    class Client:
+        def __init__(self, *a, **k):
+            assert k.get("follow_redirects") is False
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        def stream(self, method, url, headers=None):
+            return Resp(LOC[url])
+    LOC = {"https://vm.tiktok.com/A1/": "https://www.tiktok.com/@scout2015/video/6718335390845095173?_r=1",
+           "https://vm.tiktok.com/A2/": "/@scout2015/video/6718335390845095174",
+           "https://vm.tiktok.com/A3/": "https://www.tiktok.com/login?redirect=x",
+           "https://vm.tiktok.com/A4/": "https://evil.example/@a/video/6718335390845095175"}
+    monkeypatch.setattr(resolver.httpx, "AsyncClient", Client)
+    run = lambda u: asyncio.run(resolver._tiktok_redirect(u))  # noqa: E731
+    assert run("https://vm.tiktok.com/A1/") == "6718335390845095173"
+    assert run("https://vm.tiktok.com/A2/") is None  # relative: resolved against vm.tiktok.com, not a video page there
+    assert run("https://vm.tiktok.com/A3/") is None
+    assert run("https://vm.tiktok.com/A4/") is None

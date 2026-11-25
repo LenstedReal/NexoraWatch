@@ -420,20 +420,22 @@ def test_resolve_vimeo_public_and_unlisted():
 def test_resolve_twitch_vod_live_and_clip():
     vod = requests.post(f"{API}/resolve", json={"url": "https://www.twitch.tv/videos/2301234567"}).json()
     assert (vod["kind"], vod["video_id"], vod["live"], vod["capabilities"]["sync"]) == ("twitch", "2301234567", False, True)
-    # live channels cannot play in sync for everyone: refused (1.6.2)
-    live = requests.post(f"{API}/resolve", json={"url": "https://m.twitch.tv/SomeChannel"})
-    assert live.status_code == 422 and live.json()["code"] == "twitch_live"
+    # live channels: everyone watches live, the room follows play / pause (1.8.3)
+    live = requests.post(f"{API}/resolve", json={"url": "https://m.twitch.tv/SomeChannel"}).json()
+    assert (live["kind"], live["live"], live["capabilities"]["sync"], live["capabilities"]["seek"]) == ("twitch", True, True, False)
     clip = requests.post(f"{API}/resolve", json={"url": "https://clips.twitch.tv/FunnyClipSlug-abc123"})
     assert clip.status_code == 422 and clip.json()["code"] == "twitch_clip"
 
 
 def test_resolve_unsynced_sources_are_refused():
-    """1.6.2: Nexora is a watch-together app; Kick live, Instagram and X embeds cannot play in sync, so they are refused.
-    1.8.0: X and Kick say how it works instead: the app's browser finds their video file, which plays in sync."""
-    for url, code in (("https://m.kick.com/SomeStreamer", "find_in_app"), ("https://www.instagram.com/reel/C1a2B3c4D5e/", "no_sync_source"),
-                      ("https://x.com/someone/status/1790000000000000001", "find_in_app")):
+    """Nexora is a watch-together app: Instagram's embed cannot play in sync, so it is refused (1.6.2). X posts play their
+    video file in sync since 1.8.2, Kick channels their live HLS since 1.8.3; a post / channel that does not exist (or
+    that the test server cannot reach: Kick's bot check, no network) is refused with that reason."""
+    for url, codes in (("https://m.kick.com/SomeStreamer", {"kick_offline", "not_found", "kick_app_only"}),
+                       ("https://www.instagram.com/reel/C1a2B3c4D5e/", {"no_sync_source"}),
+                       ("https://x.com/someone/status/1790000000000000001", {"x_unavailable", "x_no_video", "network"})):
         r = requests.post(f"{API}/resolve", json={"url": url})
-        assert r.status_code == 422 and r.json()["code"] == code, (url, r.text)
+        assert r.status_code == 422 and r.json()["code"] in codes, (url, r.text)
 
 
 # Queue ("Sıra"): everyone adds and votes, only the host plays/removes, sorted by votes then time

@@ -155,7 +155,9 @@ export function usePlaybackSync({ room, isHost, conn, playerRef, ident }) {
         const playing = !p.isPaused();
         const ref = lastPubRef.current || { at: now, playing: r.playback.playing, position: expectedPosition(r.playback, offset) };
         const exp = ref.position + (ref.playing ? ((now - ref.at) / 1000) * (ref.rate || 1) : 0);
-        if (playing !== ref.playing || Math.abs(p.getTime() - exp) > HOST_TOLERANCE_S || (playing && now - ref.at > KEEPALIVE_MS)) publish(playing);
+        // Live: there is no shared position (each player rides its own live edge), only play / pause is the room's.
+        const moved = !p.isLive?.() && Math.abs(p.getTime() - exp) > HOST_TOLERANCE_S;
+        if (playing !== ref.playing || moved || (playing && now - ref.at > KEEPALIVE_MS)) publish(playing);
         return;
       }
       const pb = r.playback;

@@ -133,6 +133,8 @@ export const TwitchPlayer = ({ video, playerRef, events, onFatal }) => {
           if (cancelled) return;
           playerRef.current = {
             ready: true, supportsRate: false, kind: "twitch",
+            // A live channel: everyone watches live in Twitch's player; the room follows play / pause (usePlaybackSync).
+            isLive: () => live,
             getTime: () => (live ? 0 : Number(player.getCurrentTime()) || 0),
             isPaused: () => !!player.isPaused(),
             isBuffering: () => st.buffering,

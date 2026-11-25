@@ -12,11 +12,6 @@ import "@/browse.css";
 const isUrl = (s) => /^https?:\/\/\S+$/i.test(s);
 const isDomain = (s) => /^[\w-]+(\.[\w-]+)+(\/\S*)?$/.test(s);
 const siteHome = (domain) => `https://${domain === "youtube.com" ? "www.youtube.com" : domain}`;
-// Sites whose page address is not enough: the room needs the address of the video file itself (the app finds it alone).
-const FILE_LINK_SITES = new Set(["archive.org"]);
-// Sites where only the app's browser can find the video (the file their page plays, see the app's BrowserModal): a web
-// page cannot look inside another site, so they are not offered here.
-const APP_ONLY_SITES = new Set(["x.com", "kick.com", "dailymotion.com", "reddit.com", "rumble.com", "odysee.com", "streamable.com"]);
 const FOCUSABLE = 'a[href],button:not([disabled]),input:not([disabled]),[tabindex]:not([tabindex="-1"])';
 
 function parts(url) {
@@ -52,9 +47,10 @@ export function BrowseSheet({ onClose, onBring }) {
   const t = useT();
   const cfg = useAppConfig();
   // Drive files are not browsed: their share link is pasted and the server imports the file.
-  const sites = cfg.allowed_sites.filter((s) => s.domain !== "drive.google.com" && !APP_ONLY_SITES.has(s.domain));
+  // The same sites as the app's browser: every listed site works the same on the web and in the app.
+  const sites = cfg.allowed_sites.filter((s) => s.domain !== "drive.google.com");
   const [step, setStep] = useState("sites"); // "sites" → "link"
-  const [site, setSite] = useState(null); // {name, url, file}: what was opened in the other tab
+  const [site, setSite] = useState(null); // {name, url}: what was opened in the other tab
   const [q, setQ] = useState("");
   const [link, setLink] = useState("");
   const [found, setFound] = useState(null); // a link seen on the clipboard, waiting for a click
@@ -155,7 +151,7 @@ export function BrowseSheet({ onClose, onBring }) {
   const openSite = (s) => {
     const url = siteHome(s.domain);
     window.open(url, "_blank", "noopener");
-    toLinkStep({ name: s.name, url, file: FILE_LINK_SITES.has(s.domain) });
+    toLinkStep({ name: s.name, url });
   };
 
   const search = (e) => {
@@ -253,7 +249,7 @@ export function BrowseSheet({ onClose, onBring }) {
               {site && (
                 <ol className="bs-steps" data-testid="browse-steps">
                   <li>{t("bs_step1")}</li>
-                  <li>{t(site.file ? "bs_step2_file" : "bs_step2")}</li>
+                  <li>{t("bs_step2")}</li>
                   <li>{t("bs_step3")}</li>
                 </ol>
               )}

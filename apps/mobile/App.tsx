@@ -18,6 +18,7 @@ import { ROUTE_REPORTER, adsEnabled, initialAdState, onBackground, onResume, onR
 import { NexoraAds } from "./modules/nexora-ads/src";
 import { ServicePlayer, type ServiceSession } from "./src/screens/ServicePlayer"; // rave: in-app services (beta)
 import { parseServiceCommand, serviceUrlOk, type ServiceCommand, type ServiceReport } from "./src/core/serviceController";
+import { PickBox } from "./src/core/pick";
 
 /**
  * Nexora Watch app = the Nexora Watch web app (same screens, same code, always the same version as the website)
@@ -78,6 +79,11 @@ function Shell() {
   const [failed, setFailed] = useState(false);
   const [browser, setBrowser] = useState(false);
   const picked = useRef(false);
+  // A video picked in the site browser waits until the room confirms it (src/core/pick.ts): Android may reload the
+  // room page while the browser is open, and the reloaded room asks for it again.
+  const [picks] = useState(() => new PickBox());
+  const [webKey, setWebKey] = useState(0);
+  const lastUrl = useRef<string | null>(null);
   const ads = useRef(initialAdState(ADS_ON ? AD_IDS : null, Date.now()));
   const [bannerWanted, setBannerWanted] = useState(false);
   const [bannerH, setBannerH] = useState(0);
@@ -190,6 +196,14 @@ function Shell() {
   const reply = (res: object | null) =>
     web.current?.injectJavaScript(`window.__nexoraPick && window.__nexoraPick(${JSON.stringify(res)}); true;`);
 
+  // The room page's renderer is gone (Android killed it, often together with a heavy site open in the browser). That
+  // WebView cannot be used again: a new one opens the page the person was on, and the room joins again by itself.
+  const recover = useCallback(() => {
+    setLoaded(false);
+    setStart(lastUrl.current || WEB_URL);
+    setWebKey((k) => k + 1);
+  }, []);
+
   const onMessage = useCallback((e: WebViewMessageEvent) => {
     let m: any;
     try {
@@ -199,7 +213,14 @@ function Shell() {
     }
     if (m.type === "open_browser") {
       picked.current = false;
+      picks.open(typeof m.room === "string" ? m.room : lastUrl.current ?? "");
       setBrowser(true);
+    } else if (m.type === "pick_ready") {
+      // The room (again) listens for picks: hand over one that has not arrived yet, if it was made in this room.
+      const res = picks.ready(typeof m.room === "string" ? m.room : lastUrl.current ?? "", Date.now());
+      if (res) reply(res);
+    } else if (m.type === "pick_ack") {
+      picks.ack();
     } else if (m.type === "orientation") {
       if (m.mode === "landscape") ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.LANDSCAPE).catch(() => {});
       else
@@ -211,7 +232,10 @@ function Shell() {
       else deactivateKeepAwake("room");
     } else if (m.type === "route") {
       // SPA navigation reported by ROUTE_REPORTER (pushState / replaceState / popstate).
-      if (typeof m.path === "string") routeChanged(m.path);
+      if (typeof m.path === "string") {
+        routeChanged(m.path);
+        if (m.path.startsWith("/")) lastUrl.current = WEB_URL + m.path;
+      }
     } else if (m.type === "open_external") {
       // "Watch on the web": the website opens in the phone's browser.
       if (isOwnWebUrl(m.url)) Linking.openURL(m.url).catch(() => {});
@@ -229,7 +253,7 @@ function Shell() {
         web.current?.injectJavaScript(`window.__nexoraPush && window.__nexoraPush(${JSON.stringify(r)}); true;`),
       );
     }
-  }, [routeChanged]);
+  }, [routeChanged, picks]);
 
   // rave: the service page's reports go to the room's ServiceCard.
   const toRoom = (r: ServiceReport | { type: "closed" }) =>
@@ -242,7 +266,7 @@ function Shell() {
 
   const onPick = async (m: DetectedMedia) => {
     picked.current = true;
-    reply({ url: m.url, referer: m.page, title: m.title || null, kind: m.kind });
+    reply(picks.picked(m, Date.now()));
     setBrowser(false);
   };
   const onCloseBrowser = () => {
@@ -276,6 +300,7 @@ function Shell() {
       <StatusBar style="light" hidden={landscape} translucent backgroundColor="transparent" />
       {start && (
         <WebView
+          key={webKey}
           ref={web}
           source={{ uri: start }}
           injectedJavaScriptBeforeContentLoaded={BOOT + insetScript}
@@ -285,6 +310,7 @@ function Shell() {
           onNavigationStateChange={(s) => {
             canBack.current = s.canGoBack;
             if (s.url) routeChanged(s.url);
+            if (isOwnWebUrl(s.url)) lastUrl.current = s.url;
           }}
           onLoadEnd={() => {
             setLoaded(true);
@@ -294,8 +320,8 @@ function Shell() {
           onHttpError={(e) => {
             if (e.nativeEvent.statusCode >= 500 && e.nativeEvent.url.replace(/\/$/, "") === WEB_URL) setFailed(true);
           }}
-          onRenderProcessGone={() => web.current?.reload()}
-          onContentProcessDidTerminate={() => web.current?.reload()}
+          onRenderProcessGone={recover}
+          onContentProcessDidTerminate={recover}
           javaScriptEnabled
           domStorageEnabled
           allowsInlineMediaPlayback

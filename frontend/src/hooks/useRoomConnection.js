@@ -2,6 +2,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { api, wsUrl } from "@/lib/api";
 
 export const MAX_ATTEMPTS = 6;
+const SLOW_RETRY_MS = 30000; // after the quick attempts: the page keeps trying by itself for as long as it is open
+const OPEN_TIMEOUT_MS = 15000;
 const PING_MS = 10000;
 const DEAD_MS = 25000;
 export const EMOJI_LIST = ["😀", "😂", "❤️", "🔥", "👍", "😎", "😭", "😡", "👀", "🎉", "💀", "🤣"];
@@ -23,6 +25,8 @@ export function useRoomConnection(code, ident, initialRoom, onNotice) {
   const pingRef = useRef(null);
   const lastPongRef = useRef(0);
   const stoppedRef = useRef(false);
+  const connectingRef = useRef(false); // a connect() is on its way: a second one must not open a second socket
+  const genRef = useRef(0); // grows whenever the effect below starts or ends: an older connect() then gives up
   const lastErrorRef = useRef(null);
   const samplesRef = useRef([]);
   const clockRef = useRef({ offset: 0, rtt: null });
@@ -82,7 +86,10 @@ export function useRoomConnection(code, ident, initialRoom, onNotice) {
     attemptRef.current += 1;
     setAttempt(attemptRef.current);
     if (attemptRef.current > MAX_ATTEMPTS) {
+      // The banner says the server cannot be reached and offers "retry"; meanwhile the page goes on trying, so a room
+      // left open through a long outage (a new release, a dead network) comes back without anyone touching it.
       setStatus("failed");
+      timerRef.current = setTimeout(() => connectRef.current(), SLOW_RETRY_MS);
       return;
     }
     setStatus("reconnecting");
@@ -168,23 +175,48 @@ export function useRoomConnection(code, ident, initialRoom, onNotice) {
   handleRef.current = handle;
 
   const connect = useCallback(async () => {
-    if (stoppedRef.current) return;
+    // One connect at a time. Waking a phone fires "visibilitychange" and "online" together, often next to a retry
+    // timer: each used to open its own socket, the server closed the older one as "opened elsewhere" (4000), and the
+    // room ended on that screen although nobody had opened it anywhere else.
+    if (stoppedRef.current || connectingRef.current) return;
     clearTimeout(timerRef.current);
     if (wsRef.current && wsRef.current.readyState <= WebSocket.OPEN) return;
-    setStatus(attemptRef.current ? "reconnecting" : "connecting");
-    if (attemptRef.current > 0 || statsRef.current.reconnects > 0) {
-      try {
-        mergeRoom(await api.getRoom(code));
-      } catch (e) {
-        if (e.status === 404) return stop("room_not_found");
-        if (e.status === 410) return stop(e.code === "room_closed" ? "room_closed" : "room_expired");
-        return scheduleRetry();
+    const gen = genRef.current;
+    connectingRef.current = true;
+    if (attemptRef.current <= MAX_ATTEMPTS) setStatus(attemptRef.current ? "reconnecting" : "connecting");
+    try {
+      if (attemptRef.current > 0 || statsRef.current.reconnects > 0) {
+        try {
+          mergeRoom(await api.getRoom(code));
+        } catch (e) {
+          if (gen !== genRef.current) return;
+          if (e.status === 404) return stop("room_not_found");
+          if (e.status === 410) return stop(e.code === "room_closed" ? "room_closed" : "room_expired");
+          return scheduleRetry();
+        }
       }
+    } finally {
+      if (gen === genRef.current) connectingRef.current = false;
     }
-    if (stoppedRef.current) return;
+    if (stoppedRef.current || gen !== genRef.current) return;
+    if (wsRef.current && wsRef.current.readyState <= WebSocket.OPEN) return;
     const ws = new WebSocket(wsUrl(code, ident));
     wsRef.current = ws;
+    // A handshake on a dead mobile network can hang for minutes and would block every further attempt meanwhile.
+    const openTimer = setTimeout(() => {
+      if (wsRef.current !== ws || ws.readyState !== WebSocket.CONNECTING) return;
+      ws.onclose = null;
+      try { ws.close(); } catch { /* noop */ }
+      wsRef.current = null;
+      statsRef.current.reconnects += 1;
+      scheduleRetry();
+    }, OPEN_TIMEOUT_MS);
     ws.onopen = () => {
+      clearTimeout(openTimer);
+      if (wsRef.current !== ws) { // not ours any more
+        try { ws.close(); } catch { /* noop */ }
+        return;
+      }
       attemptRef.current = 0;
       setAttempt(0);
       setStatus("connected");
@@ -205,12 +237,16 @@ export function useRoomConnection(code, ident, initialRoom, onNotice) {
       }, PING_MS);
     };
     ws.onmessage = (ev) => {
+      if (wsRef.current !== ws) return;
       try {
         handleRef.current(JSON.parse(ev.data));
       } catch { /* malformed frame */ }
     };
     ws.onclose = (ev) => {
-      if (wsRef.current === ws) wsRef.current = null;
+      clearTimeout(openTimer);
+      // A socket this page has already replaced or dropped: whatever closes it now says nothing about the room.
+      if (wsRef.current !== ws) return;
+      wsRef.current = null;
       clearInterval(pingRef.current);
       if (stoppedRef.current) return;
       if (ev.code === 4410) return stop(lastErrorRef.current === "room_expired" ? "room_expired" : "room_closed");
@@ -232,6 +268,8 @@ export function useRoomConnection(code, ident, initialRoom, onNotice) {
 
   useEffect(() => {
     stoppedRef.current = false;
+    genRef.current += 1;
+    connectingRef.current = false;
     api.getMessages(code).then(addMessages).catch(() => {});
     connectRef.current();
     const wake = () => {
@@ -255,6 +293,7 @@ export function useRoomConnection(code, ident, initialRoom, onNotice) {
       window.removeEventListener("online", online);
       window.removeEventListener("offline", offline);
       stoppedRef.current = true;
+      genRef.current += 1;
       clearTimeout(timerRef.current);
       clearInterval(pingRef.current);
       const ws = wsRef.current;

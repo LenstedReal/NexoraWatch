@@ -113,6 +113,7 @@ input:focus{border-color:var(--pu)}
 .seg .on{background:var(--s4);color:#fff}
 .row{display:flex;gap:8px;padding:0 12px 12px}
 .row input{padding:12px 13px;font-size:14px;border-radius:12px}
+.src-help{margin:-4px 14px 12px;color:var(--mut);font-size:11.5px;line-height:1.45}
 .set{background:linear-gradient(90deg,#38bdf8,#ec4899);color:#000;border-radius:12px;padding:0 18px;font:700 13px var(--head);min-width:78px;display:grid;place-items:center;transition:filter .2s,transform .15s}
 .set:hover{filter:brightness(1.08)}.set:active{transform:scale(.97)}
 .inline-err{margin:0 12px 12px;color:#ff8aa3;font-size:12px;display:flex;align-items:center;gap:8px;flex-wrap:wrap}

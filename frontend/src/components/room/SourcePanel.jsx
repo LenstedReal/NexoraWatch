@@ -5,11 +5,12 @@ import { errorText, useT } from "@/i18n";
 import { api } from "@/lib/api";
 import { UploadPanel } from "./UploadPanel";
 import { BrowseSheet } from "./BrowseSheet";
-import { inApp, pickFromNativeBrowser } from "@/lib/native";
+import { inApp } from "@/lib/native";
 
 // A phone shows this panel in the "Video" tab and a wide screen next to the player: two copies can exist at once.
-// Whatever must survive closing the tab (upload, Drive import) therefore comes from the room: `upload` and `drive`.
-export const SourcePanel = ({ code, ident, video, upload, drive, onRoom }) => {
+// Whatever must survive closing the tab (upload, Drive import, a pick in the app's site browser) therefore comes from
+// the room: `upload`, `drive` and `pick`.
+export const SourcePanel = ({ code, ident, video, upload, drive, pick, onRoom }) => {
   const t = useT();
   const [tab, setTab] = useState("link");
   const [url, setUrl] = useState("");
@@ -41,26 +42,15 @@ export const SourcePanel = ({ code, ident, video, upload, drive, onRoom }) => {
     }
   };
 
-  const browse = async () => {
-    // The app has its own site browser that finds the video. A web page cannot read another site: the sheet opens
-    // the site in a new tab and takes the link back.
-    if (!inApp()) {
-      setSheet(true);
-      return;
-    }
-    const res = await pickFromNativeBrowser();
-    if (!res) return;
-    setBusy(true);
+  const browse = () => {
+    // The app has its own site browser that finds the video; what is picked there comes back through the room
+    // (useNativePick). A web page cannot read another site: the sheet opens the site in a new tab and takes the link back.
     setErr(null);
-    try {
-      onRoom(await api.setVideo(code, ident, res.url, { referer: res.referer || undefined, title: res.title || undefined }));
-    } catch (ex) {
-      setErr(ex);
-      toast.error(errorText(t, ex));
-    } finally {
-      setBusy(false);
-    }
+    if (inApp()) pick.open();
+    else setSheet(true);
   };
+  const working = busy || pick.busy;
+  const shown = err || pick.error;
 
   return (
     <section className="src-card" data-testid="source-panel">
@@ -76,13 +66,14 @@ export const SourcePanel = ({ code, ident, video, upload, drive, onRoom }) => {
       {tab === "link" ? (
         <form className="row" onSubmit={submit}>
           <input value={url} onChange={(e) => setUrl(e.target.value)} placeholder={t("url_ph")} data-testid="source-url-input" />
-          <button className="set" disabled={busy} data-testid="source-set-btn">{busy ? <Loader2 size={15} className="spin" /> : t("set")}</button>
+          <button className="set" disabled={working} data-testid="source-set-btn">{working ? <Loader2 size={15} className="spin" /> : t("set")}</button>
         </form>
       ) : (
         <UploadPanel upload={upload} />
       )}
+      {tab === "link" && <p className="src-help" data-testid="source-help">{t("src_help")}</p>}
       {tab === "link" && (
-        <button className="browse" onClick={browse} disabled={busy} data-testid="source-browse-btn"><Globe size={15} /> {t("browse_sites")}</button>
+        <button className="browse" onClick={browse} disabled={working} data-testid="source-browse-btn"><Globe size={15} /> {t("browse_sites")}</button>
       )}
       {tab === "link" && isDrive && <div className="hint" data-testid="drive-hint">{t("drive_hint")}</div>}
       {imp && (
@@ -91,7 +82,7 @@ export const SourcePanel = ({ code, ident, video, upload, drive, onRoom }) => {
           <div className="bar"><i style={{ width: `${imp.size ? Math.min(100, Math.round((imp.done / imp.size) * 100)) : 5}%` }} /></div>
         </div>
       )}
-      {err && tab === "link" && <div className="inline-err" data-testid="source-error">{errorText(t, err)}</div>}
+      {shown && tab === "link" && <div className="inline-err" data-testid="source-error">{errorText(t, shown)}</div>}
       {sheet && <BrowseSheet onClose={() => setSheet(false)} onBring={bring} />}
     </section>
   );

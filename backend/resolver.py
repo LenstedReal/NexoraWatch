@@ -1,10 +1,11 @@
 import asyncio
 import ipaddress
+import math
 import re
 import socket
 import json
 import time
-from urllib.parse import parse_qsl, quote, unquote, urlencode, urlparse, urlunparse
+from urllib.parse import parse_qsl, quote, unquote, urlencode, urljoin, urlparse, urlunparse
 
 import httpx
 
@@ -41,12 +42,33 @@ TWITCH_RESERVED = {"directory", "videos", "settings", "downloads", "search", "su
                    "popout", "moderator", "embed", "login", "signup", "following", "broadcast", "partner", "creatorcamp", "bits",
                    "payments", "messages", "activate", "annual-recap", "events", "clips", "category", "security", "safety", "ads"}
 
-# --- Kick: official live embed, an iframe of player.kick.com/<channel>
-# (https://help.kick.com/en/articles/8010826-how-to-embed-your-kick-livestream). It has no documented JS control, so a
-# channel plays live for everyone without sync. Past broadcasts and clips have no documented embed at all.
+# Live channels (Twitch, Kick): everyone watches live; the room follows play / pause, each player stays at the live edge.
+LIVE_SYNC_CAPS = {"seek": False, "rate_correction": False, "sync": True}
+
+# --- Kick: a live channel, recording or clip plays the HLS playlist Kick's own player plays (Kick's site API names it),
+# in Nexora's player. Kick's embed (player.kick.com/<channel>) has no JavaScript control, so it is not used.
 KICK_HOSTS = {"kick.com", "www.kick.com", "m.kick.com"}
 KICK_CHANNEL = re.compile(r"^/([A-Za-z0-9][A-Za-z0-9_-]{2,39})/?$")
-KICK_RECORDED = re.compile(r"^/(?:video/[\w-]+|[A-Za-z0-9][A-Za-z0-9_-]{2,39}/(?:videos?|clips?)/[\w-]+)/?$")
+KICK_VIDEO = re.compile(r"^/(?:video/|[A-Za-z0-9][A-Za-z0-9_-]{2,39}/videos?/)([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/?$", re.I)
+KICK_CLIP_PATH = re.compile(r"^/[A-Za-z0-9][A-Za-z0-9_-]{2,39}/clips?/(clip_[A-Za-z0-9]{10,40})/?$")
+KICK_CLIP_ID = re.compile(r"^clip_[A-Za-z0-9]{10,40}$")
+KICK_TIMEOUT = 8
+KICK_MAX_BYTES = 2 * 1024 * 1024
+KICK_APP_ONLY = "Kick bu bağlantıyı sunucumuza açmıyor; yayını uygulamadaki Sitelerde gez ve video bul ile ekle"
+
+# --- Reddit: a post's video is Reddit's own HLS playlist (v.redd.it/<id>/HLSPlaylist.m3u8), read from the post's public
+# data (www.reddit.com/comments/<id>.json). There is no key to ask with: Reddit closed self-service API access in
+# November 2025 and stopped taking new Data API requests on 31 October 2026. When Reddit refuses the server, the app's
+# browser finds the playlist in the page itself (docs/BEKLEYENLER.md).
+REDDIT_HOSTS = {"reddit.com", "www.reddit.com", "old.reddit.com", "new.reddit.com", "m.reddit.com", "np.reddit.com"}
+REDDIT_POST = re.compile(r"^/(?:r/[A-Za-z0-9_]{2,21}/)?comments/([a-z0-9]{4,10})(?:/|$)", re.I)
+REDDIT_SHARE = re.compile(r"^/r/[A-Za-z0-9_]{2,21}/s/[A-Za-z0-9]{6,20}/?$")
+REDDIT_SHORT = re.compile(r"^/([a-z0-9]{4,10})/?$", re.I)
+REDDIT_TIMEOUT = 8
+REDDIT_MAX_BYTES = 4 * 1024 * 1024
+REDDIT_UA = "web:nexora-watch:1.8 (by /u/nexorawatch)"
+REDDIT_APP_ONLY = "Reddit bu gönderinin bilgisini sunucumuza vermedi; videoyu uygulamadaki Sitelerde gez ve video bul ile ekle"
+
 KICK_RESERVED = {"browse", "categories", "category", "following", "dashboard", "video", "videos", "clips", "search", "settings",
                  "about", "terms-of-service", "privacy-policy", "community-guidelines", "dmca-policy", "careers", "help",
                  "login", "signup", "auth", "api", "popout", "transactions", "subscriptions", "messages", "creator-program",
@@ -81,9 +103,18 @@ TIKTOK_ID = re.compile(r"^\d{15,21}$")
 IG_HOSTS = {"instagram.com", "www.instagram.com", "m.instagram.com"}
 IG_PATH = re.compile(r"^/(?:[A-Za-z0-9_.]{1,30}/)?(p|reels?|tv)/([A-Za-z0-9_-]{5,40})(?:/embed(?:/captioned)?)?/?$")
 
-# --- X / Twitter: official embedded post (platform.twitter.com/embed/Tweet.html?id=<id>). No sync. ---------------------
+# --- X / Twitter: a post's video plays in Nexora's own player, in sync, on the web and in the app alike. X's embed cannot
+# be synced; its video file is read from the data X's own embedded-post widget loads (the syndication endpoint, the
+# same one Vercel's react-tweet library uses): https://cdn.syndication.twimg.com/tweet-result?id=<id>&token=<token>.
 X_HOSTS = {"x.com", "www.x.com", "mobile.x.com", "twitter.com", "www.twitter.com", "mobile.twitter.com", "m.twitter.com"}
 X_PATH = re.compile(r"^/(?:[A-Za-z0-9_]{1,15}|i(?:/web)?)/status(?:es)?/(\d{5,20})(?:/(?:video|photo)/\d)?/?$")
+X_SYNDICATION = "https://cdn.syndication.twimg.com/tweet-result"
+X_VIDEO_HOSTS = {"video.twimg.com"}
+X_MAX_BITRATE = 2_500_000  # about 720p: enough for a phone, light enough to stay in sync
+X_TIMEOUT = 8
+X_MAX_BYTES = 2 * 1024 * 1024
+_x_cache: dict = {}  # post id -> (expires at, result or ApiError)
+X_CACHE_MAX = 500
 
 # --- Facebook: official Embedded Video Player (https://developers.facebook.com/docs/plugins/embedded-video-player/api):
 # the JS SDK's fb-video with play / pause / seek / getCurrentPosition and events. fb.watch and /share/ short links can
@@ -139,6 +170,18 @@ async def _probe(url: str, referer: str | None = None, origin: str | None = None
         raise ApiError(422, "network", "Kaynağa ulaşılamadı")
 
 
+MIN_VIDEO_BYTES = 64 * 1024  # smaller "videos" are pieces of a stream (fMP4 init segments): nothing to watch
+
+
+def _total_size(p: dict) -> int | None:
+    """The whole file's size: from Content-Range (206), or Content-Length when the server ignored the Range (200)."""
+    cr = p["headers"].get("content-range", "")
+    if "/" in cr and cr.rsplit("/", 1)[1].isdigit():
+        return int(cr.rsplit("/", 1)[1])
+    cl = p["headers"].get("content-length", "")
+    return int(cl) if p["status"] == 200 and cl.isdigit() else None
+
+
 def _http_errors(p: dict):
     s = p["status"]
     if s in (401, 403):
@@ -172,25 +215,52 @@ def _classify(url: str, p: dict, provider: str) -> dict | None:
 
 # --- A file found by the app's browser: can the room's other devices open it? ------------------------------------
 # The phone that found it played it as the site's own page does (that site as Referer, its cookies). Everyone else
-# plays it from the room page: a request from our own address and, for HLS (hls.js reads the playlist with XHR), one
-# that CORS must allow. The server asks the same way, from another network, so a file locked to the site, to the
-# finder's connection or to a short session is refused here instead of failing on everyone's screen in the room.
+# plays it from the room page, a request from our own address:
+#   MP4 (<video>, no CORS): the file must not be locked with Cross-Origin-Resource-Policy (Instagram's CDN is)
+#   HLS (hls.js reads with XHR): CORS must allow us, for the playlist and for what it points to (renditions, segments)
+# The server asks the same way, from another network, so a file locked to the site, to the finder's connection or to
+# a short session is refused here instead of failing on everyone's screen in the room.
 SOURCE_LOCKED = "Bu site videosunu yalnızca kendi sayfasında oynatıyor; odadaki diğer cihazlar açamaz"
+
+
+def _open_to_us(p: dict, cors: bool, origin: str) -> bool:
+    if p["status"] >= 400:
+        return False
+    h = p["headers"]
+    if cors:
+        return h.get("access-control-allow-origin", "").strip().rstrip("/") in ("*", origin)
+    return h.get("cross-origin-resource-policy", "").strip().lower() not in ("same-origin", "same-site")
+
+
+def _first_uri(head: bytes, base: str) -> str | None:
+    """The first rendition (master playlist) or segment (media playlist) an HLS playlist points to."""
+    for line in head.decode("utf-8", "replace").splitlines()[1:]:
+        line = line.strip()
+        if line and not line.startswith("#"):
+            u = urljoin(base, line)
+            return u if urlparse(u).scheme in ("http", "https") else None
+    return None
 
 
 async def _assert_shareable(c: dict, referer: str | None):
     if not referer or c.get("kind") not in ("direct", "hls"):
         return
     origin = config.WEB_URL
-    try:
-        p = await _probe(c["stream_url"], f"{origin}/", origin=origin, ranged=c["kind"] == "direct")
-    except ApiError as e:
-        if e.code == "network":  # a slow answer right after a good one: not a reason to refuse
+    hls = c["kind"] == "hls"
+    url = c["stream_url"]
+    for _ in range(2):  # the file itself; for HLS also the first thing the playlist points to
+        try:
+            p = await _probe(url, f"{origin}/", origin=origin, ranged=not HLS_EXT.search(url))
+        except ApiError as e:
+            if e.code == "network":  # a slow answer right after a good one: not a reason to refuse
+                return
+            raise ApiError(422, "source_locked", SOURCE_LOCKED)
+        if not _open_to_us(p, hls, origin):
+            raise ApiError(422, "source_locked", SOURCE_LOCKED)
+        nxt = _first_uri(p["head"], p["final_url"]) if hls and p["head"].lstrip().startswith(b"#EXTM3U") else None
+        if not nxt:
             return
-        raise ApiError(422, "source_locked", SOURCE_LOCKED)
-    allow = p["headers"].get("access-control-allow-origin", "").strip().rstrip("/")
-    if p["status"] >= 400 or (c["kind"] == "hls" and allow not in ("*", origin)):
-        raise ApiError(422, "source_locked", SOURCE_LOCKED)
+        url = nxt
 
 
 def _vimeo(url: str, parsed) -> dict | None:
@@ -244,25 +314,199 @@ def _twitch(url: str, parsed) -> dict | None:
         return {**base, "video_id": vid, "channel": None, "live": False, "embed_url": f"https://player.twitch.tv/?video=v{vid}",
                 "title": f"Twitch · {owner}" if owner else "Twitch", "capabilities": EMBED_CAPS}
     return {**base, "video_id": None, "channel": channel, "live": True, "embed_url": f"https://player.twitch.tv/?channel={channel}",
-            "title": f"Twitch · {owner}", "capabilities": LIVE_CAPS}
+            "title": f"Twitch · {owner}", "capabilities": LIVE_SYNC_CAPS}
 
 
-def _kick(url: str, parsed) -> dict | None:
-    """A Kick channel -> Kick's own live embed (no sync). Recorded videos and clips cannot be embedded officially."""
+async def _kick_fetch(path: str):
+    """GET kick.com/<path> (Kick's own site API): (status, JSON or None). Kick may refuse servers. Tests replace this."""
+    async with httpx.AsyncClient(timeout=KICK_TIMEOUT, follow_redirects=False) as c:
+        async with c.stream("GET", f"https://kick.com{path}", headers={"Accept": "application/json", "User-Agent": "Mozilla/5.0 NexoraWatch/1.0"}) as r:
+            if r.status_code != 200 or "json" not in r.headers.get("content-type", ""):
+                return r.status_code, None
+            body = b""
+            async for chunk in r.aiter_bytes():
+                body += chunk
+                if len(body) > KICK_MAX_BYTES:
+                    return 413, None
+    try:
+        return 200, json.loads(body)
+    except ValueError:
+        return 502, None
+
+
+async def _kick_json(path: str):
+    try:
+        status, data = await asyncio.wait_for(kick_fetch(path), KICK_TIMEOUT + 1)
+    except Exception:
+        raise ApiError(422, "kick_app_only", KICK_APP_ONLY)
+    if status == 404:
+        return None
+    if status != 200 or not isinstance(data, dict):  # Cloudflare's bot check, rate limits: the app's browser can do it
+        raise ApiError(422, "kick_app_only", KICK_APP_ONLY)
+    return data
+
+
+async def _kick(url: str, parsed) -> dict | None:
+    """A Kick live channel, recorded video or clip -> the HLS playlist Kick's own player plays, in Nexora's player.
+    Live channels play live for everyone (the room follows play / pause); recordings and clips are fully synced."""
     host = (parsed.hostname or "").lower()
     path = parsed.path or ""
     if host not in KICK_HOSTS and host != "player.kick.com":
         return None
-    if host in KICK_HOSTS and (KICK_RECORDED.match(path) or "clip" in dict(parse_qsl(parsed.query))):
-        raise ApiError(422, "kick_recorded", "Kick videosu bağlantıyla eşitlenemiyor; uygulamada Sitelerde gez ile aç, Nexora videoyu bulur")
-    m = KICK_CHANNEL.match(path)
-    if not m or (host in KICK_HOSTS and m.group(1).lower() in KICK_RESERVED):
-        return None
-    channel = m.group(1).lower()
-    return {"url": url, "kind": "kick", "video_id": None, "channel": channel, "live": True,
-            "embed_url": f"https://player.kick.com/{channel}", "stream_url": None, "mime_type": None, "provider": "kick",
-            "title": f"Kick · {m.group(1)}", "capabilities": LIVE_CAPS, "warning": None}
+    q = dict(parse_qsl(parsed.query))
+    vod = KICK_VIDEO.match(path) if host in KICK_HOSTS else None
+    clip = (KICK_CLIP_PATH.match(path) if host in KICK_HOSTS else None)
+    clip_id = clip.group(1) if clip else (q.get("clip") if KICK_CLIP_ID.match(q.get("clip", "")) else None)
+    if vod:
+        data = await _kick_json(f"/api/v1/video/{vod.group(1)}")
+        src = (data or {}).get("source")
+        live, title = False, (((data or {}).get("livestream") or {}).get("session_title") if isinstance((data or {}).get("livestream"), dict) else None)
+        if not isinstance(src, str):
+            raise ApiError(422, "not_found", "Kick videosu bulunamadı")
+    elif clip_id:
+        data = await _kick_json(f"/api/v2/clips/{clip_id}")
+        c = (data or {}).get("clip") if isinstance((data or {}).get("clip"), dict) else {}
+        src = c.get("clip_url") or c.get("video_url")
+        live, title = False, c.get("title")
+        if not isinstance(src, str):
+            raise ApiError(422, "not_found", "Kick klibi bulunamadı")
+    else:
+        m = KICK_CHANNEL.match(path)
+        if not m or (host in KICK_HOSTS and m.group(1).lower() in KICK_RESERVED):
+            return None
+        data = await _kick_json(f"/api/v2/channels/{m.group(1).lower()}")
+        if not data:
+            raise ApiError(422, "not_found", "Kick kanalı bulunamadı")
+        ls = data.get("livestream")
+        src = data.get("playback_url")
+        if not isinstance(ls, dict) or not isinstance(src, str):
+            raise ApiError(422, "kick_offline", "Bu Kick kanalı şu an yayında değil")
+        live, title = True, ls.get("session_title")
+        user = data.get("user") if isinstance(data.get("user"), dict) else {}
+        title = title or f"Kick · {user.get('username') or m.group(1)}"
+    p = urlparse(src)
+    if p.scheme != "https" or not p.hostname:
+        raise ApiError(422, "not_found", "Kick videosu bulunamadı")
+    res = await _media_file(src, url)
+    if not isinstance(title, str) or not title.strip():
+        title = "Kick"
+    return {**res, "url": url, "title": " ".join(title.split())[:120], "provider": "kick", "live": live}
 
+
+# ---- Reddit
+async def _reddit_fetch(post_id: str):
+    """A Reddit post's public data: (status, JSON or None). Reddit may refuse servers. Tests replace this."""
+    async with httpx.AsyncClient(timeout=REDDIT_TIMEOUT, follow_redirects=False) as c:
+        async with c.stream("GET", f"https://www.reddit.com/comments/{post_id}.json?raw_json=1",
+                            headers={"User-Agent": REDDIT_UA, "Accept": "application/json"}) as r:
+            if r.status_code != 200 or "json" not in r.headers.get("content-type", ""):
+                return r.status_code, None
+            body = b""
+            async for chunk in r.aiter_bytes():
+                body += chunk
+                if len(body) > REDDIT_MAX_BYTES:
+                    return 413, None
+    try:
+        return 200, json.loads(body)
+    except ValueError:
+        return 502, None
+
+
+async def _reddit_share(url: str) -> str | None:
+    """The post a Reddit share link (reddit.com/r/<sub>/s/<code>) leads to: its redirect, the body is never read."""
+    try:
+        async with httpx.AsyncClient(follow_redirects=False, timeout=REDDIT_TIMEOUT, event_hooks={"request": [_guard]}) as c:
+            async with c.stream("GET", url, headers={"User-Agent": REDDIT_UA}) as r:
+                loc = r.headers.get("location", "")
+    except (ApiError, httpx.HTTPError):
+        return None
+    p = urlparse(urljoin(url, loc)) if loc else None
+    if not p or (p.hostname or "").lower() not in REDDIT_HOSTS:
+        return None
+    m = REDDIT_POST.match(p.path or "")
+    return m.group(1).lower() if m else None
+
+
+def _reddit_video(post: dict) -> tuple[str | None, str]:
+    """The HLS playlist of a post (or of the post it crossposts) and its title."""
+    for p in [post] + [x for x in (post.get("crosspost_parent_list") or []) if isinstance(x, dict)]:
+        for key in ("secure_media", "media"):
+            v = (p.get(key) or {}).get("reddit_video") if isinstance(p.get(key), dict) else None
+            if isinstance(v, dict) and isinstance(v.get("hls_url"), str):
+                return v["hls_url"], str(post.get("title") or p.get("title") or "")
+    return None, str(post.get("title") or "")
+
+
+async def _reddit(url: str, parsed) -> dict | None:
+    """A Reddit post with a video -> Reddit's own HLS playlist of it, in Nexora's player (synced)."""
+    host = (parsed.hostname or "").lower()
+    path = parsed.path or ""
+    if host in ("redd.it", "www.redd.it"):
+        m = REDDIT_SHORT.match(path)
+        post_id = m.group(1).lower() if m else None
+    elif host in REDDIT_HOSTS:
+        m = REDDIT_POST.match(path)
+        if m:
+            post_id = m.group(1).lower()
+        elif REDDIT_SHARE.match(path):
+            post_id = await _reddit_share(url)
+            if not post_id:
+                raise ApiError(422, "reddit_share", "Reddit paylaşım bağlantısı açılamadı; gönderiyi açıp tam adresini kopyala")
+        else:
+            if path not in ("", "/"):
+                raise ApiError(422, "social_link", "Bu bağlantıda tek bir gönderi yok; gönderinin kendi bağlantısını kopyala")
+            return None
+    else:
+        return None
+    if not post_id:
+        return None
+    try:
+        status, data = await asyncio.wait_for(reddit_fetch(post_id), REDDIT_TIMEOUT + 2)
+    except Exception:
+        raise ApiError(422, "reddit_app_only", REDDIT_APP_ONLY)
+    if status == 404:
+        raise ApiError(422, "not_found", "Reddit gönderisi bulunamadı")
+    if status != 200 or not isinstance(data, list) or not data:
+        raise ApiError(422, "reddit_app_only", REDDIT_APP_ONLY)
+    try:
+        post = data[0]["data"]["children"][0]["data"]
+    except (KeyError, IndexError, TypeError):
+        raise ApiError(422, "not_found", "Reddit gönderisi bulunamadı")
+    hls, title = _reddit_video(post if isinstance(post, dict) else {})
+    if not hls or (urlparse(hls).hostname or "").lower() != "v.redd.it":
+        raise ApiError(422, "reddit_no_video", "Bu Reddit gönderisinde Reddit'e yüklenmiş bir video yok")
+    res = await _media_file(hls, f"https://www.reddit.com/comments/{post_id}/")
+    return {**res, "url": f"https://www.reddit.com/comments/{post_id}/", "video_id": post_id,
+            "title": " ".join(title.split())[:120] or "Reddit", "provider": "reddit"}
+
+
+async def _media_file(src: str, page: str) -> dict:
+    """A video file a site's player plays (found by the server): checked like any other link, and it must open for the
+    room's other devices exactly as it opens here (CORS / CORP, see _assert_shareable)."""
+    await _assert_public(urlparse(src).hostname or "")
+    p = await _probe(src, page)
+    _http_errors(p)
+    c = _classify(src, p, urlparse(page).hostname or "")
+    if not c:
+        raise ApiError(422, "unsupported", "Sitenin verdiği adres bir video değil")
+    await _assert_shareable(c, page)
+    return {"video_id": None, "embed_url": None, "warning": None, **c}
+
+
+def _youtube(url: str) -> dict | None:
+    yt = YT_RE.search(url)
+    if not yt:
+        return None
+    vid = yt.group(1)
+    return {"url": url, "kind": "youtube", "video_id": vid, "embed_url": f"https://www.youtube.com/embed/{vid}",
+            "stream_url": None, "title": "YouTube", "mime_type": None, "provider": "youtube",
+            "capabilities": {"seek": True, "rate_correction": False, "sync": True}, "warning": None}
+
+
+async def _official(url: str, parsed) -> dict | None:
+    """The site's own player for a page of a supported site (YouTube, Vimeo, Twitch, Kick, Instagram, X, Facebook, TikTok)."""
+    return (_youtube(url) or _vimeo(url, parsed) or _twitch(url, parsed) or await _kick(url, parsed) or _instagram(url, parsed)
+            or await _x(url, parsed) or _facebook(url, parsed) or await _tiktok(url, parsed) or await _reddit(url, parsed))
 
 
 def _embed_base(url: str, kind: str) -> dict:
@@ -288,6 +532,27 @@ async def _tiktok_oembed(url: str) -> str | None:
     return vid or None
 
 
+async def _tiktok_redirect(url: str) -> str | None:
+    """The video id of a TikTok short link from the address it redirects to (one request, the body is never read)."""
+    try:
+        async with httpx.AsyncClient(follow_redirects=False, timeout=8, event_hooks={"request": [_guard]}) as c:
+            async with c.stream("GET", url, headers={"User-Agent": "Mozilla/5.0 (Linux; Android 14) NexoraWatch/1.0"}) as r:
+                loc = r.headers.get("location", "")
+    except (ApiError, httpx.HTTPError):
+        return None
+    if not loc:
+        return None
+    p = urlparse(urljoin(url, loc))
+    if (p.hostname or "").lower() not in TIKTOK_HOSTS:
+        return None
+    m = TIKTOK_PATH.match(p.path or "")
+    return m.group(1) if m else None
+
+
+async def _tiktok_short(url: str) -> str | None:
+    return await _tiktok_oembed(url) or await _tiktok_redirect(url)
+
+
 async def _tiktok(url: str, parsed) -> dict | None:
     """A TikTok video (or a short share link to one) -> the official Embed Player (synced)."""
     host = (parsed.hostname or "").lower()
@@ -298,7 +563,7 @@ async def _tiktok(url: str, parsed) -> dict | None:
         if m:
             vid = m.group(1)
         elif path.startswith("/t/") and TIKTOK_SHORT_PATH.match(path):
-            vid = await _tiktok_oembed(url)
+            vid = await _tiktok_short(url)
             if not vid:
                 raise ApiError(422, "tiktok_short", "TikTok kısa bağlantısı açılamadı; videoyu TikTok'ta açıp tam bağlantısını kopyala")
         elif path.startswith("/@"):
@@ -308,7 +573,7 @@ async def _tiktok(url: str, parsed) -> dict | None:
     elif host in TIKTOK_SHORT_HOSTS:
         if not TIKTOK_SHORT_PATH.match(path):
             return None
-        vid = await _tiktok_oembed(url)
+        vid = await _tiktok_short(url)
         if not vid:
             raise ApiError(422, "tiktok_short", "TikTok kısa bağlantısı açılamadı; videoyu TikTok'ta açıp tam bağlantısını kopyala")
     else:
@@ -332,8 +597,145 @@ def _instagram(url: str, parsed) -> dict | None:
             "title": "Instagram", "capabilities": NOSYNC_CAPS}
 
 
-def _x(url: str, parsed) -> dict | None:
-    """An X (Twitter) post -> the official embedded post (no sync)."""
+def _js_radix(value: float, radix: int = 36) -> str:
+    """Number.prototype.toString(radix) of a finite double, digit for digit as V8 writes it (DoubleToRadixCString)."""
+    chars = "0123456789abcdefghijklmnopqrstuvwxyz"
+    negative = value < 0
+    value = -value if negative else value
+    integer = math.floor(value)
+    fraction = value - integer
+    delta = max(math.nextafter(0.0, 1.0), 0.5 * (math.nextafter(value, math.inf) - value))
+    frac: list[int] = []
+    if fraction >= delta:
+        while True:
+            fraction *= radix
+            delta *= radix
+            digit = int(fraction)
+            frac.append(digit)
+            fraction -= digit
+            if (fraction > 0.5 or (fraction == 0.5 and digit & 1)) and fraction + delta > 1:
+                while True:  # round up, carrying over the digits already written
+                    if not frac:
+                        integer += 1
+                        break
+                    d = frac.pop()
+                    if d + 1 < radix:
+                        frac.append(d + 1)
+                        break
+                break
+            if not fraction >= delta:
+                break
+    out = []
+    integer = float(integer)
+    while integer / radix >= 2.0 ** 53:  # digits below a huge number's precision are zeros
+        integer /= radix
+        out.append("0")
+    while True:
+        rem = math.fmod(integer, radix)
+        out.append(chars[int(rem)])
+        integer = (integer - rem) / radix
+        if not integer > 0:
+            break
+    text = "".join(reversed(out)) + ("." + "".join(chars[d] for d in frac) if frac else "")
+    return ("-" if negative else "") + text
+
+
+def x_token(post_id: str) -> str:
+    """The token X's embed widget sends with a post id: ((id / 1e15) * Math.PI).toString(36) without zeros and the dot."""
+    return re.sub(r"(0+|\.)", "", _js_radix((int(post_id) / 1e15) * math.pi))
+
+
+async def _x_fetch(post_id: str):
+    """X's embed data of a post: (status, JSON or None). Tests replace this."""
+    q = urlencode({"id": post_id, "lang": "en", "token": x_token(post_id)})
+    async with httpx.AsyncClient(timeout=X_TIMEOUT, follow_redirects=False) as c:
+        async with c.stream("GET", f"{X_SYNDICATION}?{q}", headers={"User-Agent": "Mozilla/5.0 NexoraWatch/1.0", "Accept": "application/json"}) as r:
+            if r.status_code != 200:
+                return r.status_code, None
+            body = b""
+            async for chunk in r.aiter_bytes():
+                body += chunk
+                if len(body) > X_MAX_BYTES:
+                    return 413, None
+    try:
+        return 200, json.loads(body)
+    except ValueError:
+        return 502, None
+
+
+def _x_media(post: dict) -> tuple[list[dict], dict]:
+    """The video variants of a post (or of the post it quotes) and the post that carries them."""
+    for p in (post, post.get("quoted_tweet")):
+        if not isinstance(p, dict):
+            continue
+        out = []
+        for m in p.get("mediaDetails") or []:
+            if isinstance(m, dict) and m.get("type") in ("video", "animated_gif"):
+                out += [v for v in ((m.get("video_info") or {}).get("variants") or []) if isinstance(v, dict)]
+        if not out and isinstance(p.get("video"), dict):  # the newer shape: video.variants = [{type, src}]
+            out = [{"content_type": v.get("type"), "url": v.get("src")} for v in p["video"].get("variants") or [] if isinstance(v, dict)]
+        if out:
+            return out, p
+    return [], post
+
+
+def _x_pick(variants: list[dict]) -> str | None:
+    """The MP4 to play: the best one up to about 720p (X lists 270p to 1080p), else the lightest."""
+    mp4 = []
+    for v in variants:
+        u = v.get("url")
+        if v.get("content_type") != "video/mp4" or not isinstance(u, str):
+            continue
+        p = urlparse(u)
+        if p.scheme != "https" or (p.hostname or "").lower() not in X_VIDEO_HOSTS:
+            continue
+        b = v.get("bitrate")
+        mp4.append((b if isinstance(b, (int, float)) else 0, u))
+    if not mp4:
+        return None
+    fit = [m for m in mp4 if m[0] <= X_MAX_BITRATE]
+    return (max(fit) if fit else min(mp4))[1]
+
+
+def _x_title(post: dict) -> str:
+    text = re.sub(r"\s*https://t\.co/\w+", "", str(post.get("text") or "")).strip()
+    text = " ".join(text.split())[:120]
+    user = post.get("user") if isinstance(post.get("user"), dict) else {}
+    name = user.get("screen_name") if isinstance(user.get("screen_name"), str) else ""
+    return text or (f"X · @{name}" if name else "X")
+
+
+async def _x_video(post_id: str) -> dict:
+    """A post's video file and title from X's embed data; ApiError when the post has none or cannot be read."""
+    now = time.monotonic()
+    hit = _x_cache.get(post_id)
+    if hit and hit[0] > now:
+        if isinstance(hit[1], ApiError):
+            raise hit[1]
+        return hit[1]
+    try:
+        status, data = await asyncio.wait_for(x_fetch(post_id), X_TIMEOUT + 1)
+    except Exception:  # network, timeout: not remembered, the next try may work
+        raise ApiError(422, "network", "X'e ulaşılamadı; biraz sonra yeniden dene")
+    if status == 200 and isinstance(data, dict) and data.get("__typename") != "TweetTombstone":
+        variants, post = _x_media(data)
+        url = _x_pick(variants)
+        res = {"stream_url": url, "title": _x_title(post)} if url else ApiError(422, "x_no_video", "Bu X gönderisinde oynatılabilir bir video yok")
+    elif status in (200, 404):
+        res = ApiError(422, "x_unavailable", "Bu X gönderisi açılamıyor: silinmiş, gizli ya da yaş sınırlı olabilir")
+    else:
+        raise ApiError(422, "network", "X bu gönderiyi şu an vermiyor; biraz sonra yeniden dene")
+    _x_cache.pop(post_id, None)
+    _x_cache[post_id] = (now + (900 if not isinstance(res, ApiError) else 120), res)
+    while len(_x_cache) > X_CACHE_MAX:
+        _x_cache.pop(next(iter(_x_cache)))
+    if isinstance(res, ApiError):
+        raise res
+    return res
+
+
+async def _x(url: str, parsed) -> dict | None:
+    """An X (Twitter) post -> its video file, played in sync in Nexora's own player (see X_SYNDICATION)."""
     host = (parsed.hostname or "").lower()
     vid = None
     if host == "platform.twitter.com" and (parsed.path or "").rstrip("/") in ("/embed/Tweet.html", "/embed/index.html"):
@@ -350,8 +752,15 @@ def _x(url: str, parsed) -> dict | None:
         vid = m.group(1)
     else:
         return None
-    return {**_embed_base(url, "x"), "video_id": vid, "embed_url": f"https://platform.twitter.com/embed/Tweet.html?id={vid}",
-            "title": "X", "capabilities": NOSYNC_CAPS}
+    found = await _x_video(vid)
+    # The file must open for everyone in the room exactly as it opens here: checked like any other video link.
+    p = await _probe(found["stream_url"])
+    _http_errors(p)
+    c = _classify(found["stream_url"], p, "x")
+    if not c or c["kind"] != "direct":
+        raise ApiError(422, "x_no_video", "Bu X gönderisinde oynatılabilir bir video yok")
+    await _assert_shareable(c, f"https://x.com/i/status/{vid}")
+    return {"url": f"https://x.com/i/status/{vid}", "video_id": vid, "embed_url": None, "title": found["title"], "warning": None, **c}
 
 
 def _facebook(url: str, parsed) -> dict | None:
@@ -517,6 +926,9 @@ async def _fetch_oembed(url: str):
 
 
 oembed_fetch = _fetch_oembed
+x_fetch = _x_fetch
+kick_fetch = _kick_fetch
+reddit_fetch = _reddit_fetch
 
 
 async def _oembed_title(key: str, url: str) -> str | None:
@@ -560,21 +972,18 @@ async def resolve(url_in, referer=None, title=None) -> dict:
     ref = _clean_referer(referer)
     custom_title = _clean_title(title)
     res = await _resolve(url_in, ref)
-    # Nexora is a watch-together app: a source that cannot play at the same moment for everyone is not offered.
+    # Nexora is a watch-together app: a source the room cannot keep together is not offered, not even "without sync"
+    # (Instagram's embed, Drive's preview). Live channels (Twitch, Kick) are kept together: everyone watches live and
+    # the room follows play / pause. Each refusal says why and, where there is one, what works instead.
     if (res.get("capabilities") or {}).get("sync") is False:
         kind = res.get("kind")
-        if kind == "twitch":
-            raise ApiError(422, "twitch_live", "Twitch canlı yayınları eşitlenemiyor; kayıtlı yayın bağlantısı paylaş")
         if kind == "drive_embed":
             raise ApiError(422, "drive_no_stream", "Drive bu dosyayı akış olarak sunmuyor; dosyayı indirip Videoyu yükle ile ekle")
-        if kind in ("x", "kick"):
-            # Their embeds cannot be synced, but the app's browser finds the video file itself, and that plays in sync.
-            raise ApiError(422, "find_in_app", "Bu bağlantı yapıştırılınca eşitlenemiyor; uygulamada Sitelerde gez ile aç, Nexora videoyu bulur")
         raise ApiError(422, "no_sync_source", "Bu kaynak herkeste aynı anda oynatılamıyor, bu yüzden desteklenmiyor")
     if res.get("kind") in PROVIDER_LABELS:
         res["title"] = await _provider_title(res, custom_title)
-    elif custom_title:
-        res["title"] = custom_title
+    elif custom_title and not (res.get("provider") == "x" and res.get("title") != "X"):
+        res["title"] = custom_title  # an X post keeps its own text: the page title only adds "on X: ... / X"
     if ref and res.get("kind") in ("direct", "hls"):
         res["headers"] = {"Referer": ref}
     return res
@@ -594,15 +1003,7 @@ async def _resolve(url_in, referer: str | None) -> dict:
             raise ApiError(403, "drm_not_allowed", "Telif korumalı/abonelikli platformlardan içerik paylaşılamaz")
         return svc
 
-    yt = YT_RE.search(url)
-    if yt:
-        vid = yt.group(1)
-        return {"url": url, "kind": "youtube", "video_id": vid, "embed_url": f"https://www.youtube.com/embed/{vid}",
-                "stream_url": None, "title": "YouTube", "mime_type": None, "provider": "youtube",
-                "capabilities": {"seek": True, "rate_correction": False, "sync": True}, "warning": None}
-
-    official = (_vimeo(url, parsed) or _twitch(url, parsed) or _kick(url, parsed) or _instagram(url, parsed) or _x(url, parsed)
-                or _facebook(url, parsed) or await _tiktok(url, parsed))
+    official = await _official(url, parsed)
     if official:
         return official
 
@@ -633,6 +1034,8 @@ async def _resolve(url_in, referer: str | None) -> dict:
     p = await _probe(raw or url, referer)
     _http_errors(p)
     c = _classify(raw or url, p, "dropbox" if raw else parsed.hostname)
+    if c and c["kind"] == "direct" and (_total_size(p) or MIN_VIDEO_BYTES) < MIN_VIDEO_BYTES:
+        raise ApiError(422, "too_small", "Bu dosya bir video değil, videonun yalnızca küçük bir parçası")
     if c:
         name = unquote(parsed.path.rsplit("/", 1)[-1]).strip()[:120]
         if raw and c["kind"] == "direct":

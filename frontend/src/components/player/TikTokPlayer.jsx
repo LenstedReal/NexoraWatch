@@ -6,6 +6,9 @@ import { useEffect, useRef } from "react";
 // 2 paused, 3 buffering), onCurrentTime {currentTime, duration}, onMute and onPlayerError {errorCode, errorType}.
 const ORIGIN = "https://www.tiktok.com";
 const ERRORS = { 1001: "tiktok_notfound", 2001: "network" }; // 3001 playback / 3002 autoplay are handled as blocked play
+// TikTok's player says it is ready within seconds. Without that message nothing can be synced (the guests would sit on
+// a still picture while the host watches): after this long the room says so and offers a retry.
+const READY_TIMEOUT_MS = 20000;
 
 export const TikTokPlayer = ({ video, isHost, playerRef, events, onFatal }) => {
   const frameRef = useRef(null);
@@ -34,7 +37,13 @@ export const TikTokPlayer = ({ video, isHost, playerRef, events, onFatal }) => {
       st.buffering = on;
       evRef.current.onBuffering?.(on);
     };
+    const readyTimer = setTimeout(() => {
+      if (cancelled || playerRef.current?.kind === "tiktok") return;
+      evRef.current.onError?.();
+      onFatal("tiktok_noapi");
+    }, READY_TIMEOUT_MS);
     const ready = () => {
+      clearTimeout(readyTimer);
       if (playerRef.current?.kind === "tiktok") return;
       playerRef.current = {
         ready: true, supportsRate: false, kind: "tiktok",
@@ -128,6 +137,7 @@ export const TikTokPlayer = ({ video, isHost, playerRef, events, onFatal }) => {
     window.addEventListener("message", onMessage);
     return () => {
       cancelled = true;
+      clearTimeout(readyTimer);
       window.removeEventListener("message", onMessage);
       settle(false);
       if (playerRef.current?.kind === "tiktok") playerRef.current = null;

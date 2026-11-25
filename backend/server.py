@@ -27,6 +27,7 @@ log = logging.getLogger("nexora")
 app = FastAPI(title="Nexora Watch API")
 app.add_middleware(CORSMiddleware, allow_credentials=False, allow_origins=CORS_ORIGINS, allow_methods=["*"], allow_headers=["*"])
 write_limiter = RateLimiter(WRITE_LIMIT_PER_MIN, 60)
+WS_IDLE_S = 75
 read_limiter = RateLimiter(60, 60)  # per IP, for public listings
 metrics_limiter = RateLimiter(12, 60)  # per participant; telemetry must not use up the shared per-IP budget
 
@@ -627,7 +628,9 @@ async def ws_endpoint(ws: WebSocket):
     seen: dict = {"at": time.monotonic()}
     try:
         while True:
-            raw = await asyncio.wait_for(ws.receive_text(), timeout=45)
+            # Clients ping every 10 s. A phone that hides the app may slow its timers to one a minute: give it time
+            # before the socket counts as dead (and the host's handover clock starts).
+            raw = await asyncio.wait_for(ws.receive_text(), timeout=WS_IDLE_S)
             if not frame_limiter.allow(pid):
                 continue
             try:

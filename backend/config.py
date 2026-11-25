@@ -23,8 +23,9 @@ if not MEDIA_SIGNING_SECRET:
 
 ROOM_LIFETIME_S = int(os.environ.get("ROOM_LIFETIME_HOURS", "24")) * 3600
 ROOM_PURGE_GRACE_S = int(os.environ.get("ROOM_PURGE_GRACE_HOURS", "24")) * 3600
-# When the host has been disconnected this long, the longest-present online participant becomes the host.
-HOST_HANDOVER_S = float(os.environ.get("HOST_HANDOVER_SECONDS", "60"))
+# When the host has been disconnected this long, the longest-present online participant becomes the host. Two minutes:
+# a host who switches to another app for a moment (to copy a link) comes back still owning the room.
+HOST_HANDOVER_S = float(os.environ.get("HOST_HANDOVER_SECONDS", "120"))
 
 MAX_UPLOAD_BYTES = int(os.environ.get("MAX_UPLOAD_BYTES", str(2 * 1024**3)))
 STORAGE_QUOTA_BYTES = int(os.environ.get("STORAGE_QUOTA_BYTES", str(18 * 1024**3)))
@@ -58,15 +59,22 @@ MIN_AGE = int(os.environ.get("MIN_AGE", "16"))
 OWNER_NAME = os.environ.get("OWNER_NAME", "").strip()
 OWNER_ADDRESS = os.environ.get("OWNER_ADDRESS", "").strip()
 
-# Sites offered in the app's browser. YouTube, TikTok, Facebook, Twitch (past broadcasts) and Vimeo play in their
-# official players; on the others the app finds the video the page plays (MP4/HLS) and the room plays that file in
-# Nexora's own player, in sync. A found file that other devices cannot open is refused (resolver: source_locked).
+# Sites offered in the app's browser and on the web (the same list on both). The room keeps every one of them together:
+#   official players, synced:  YouTube, TikTok, Facebook, Twitch (past broadcasts synced; live channels: everyone live,
+#                              the room follows play / pause)
+#   Nexora's player, synced:   X (the post's video file), Kick (live channels, recordings, clips) and Reddit (the post's
+#                              HLS): the server finds the file a pasted link leads to (resolver._x / _kick / _reddit);
+#                              Kick and Reddit may refuse servers, then the app's browser finds it in the page itself
+#                              (docs/BEKLEYENLER.md)
+#   not listed:                Instagram (its player has no control, its files open only on instagram.com),
+#                              Dailymotion (waits for its official player: docs/BEKLEYENLER.md), DRM/subscription services
 # Drive files are added by their share link. Override with ALLOWED_SITES in .env ("domain|Name,...").
-_DEFAULT_SITES = ("youtube.com|YouTube,tiktok.com|TikTok,x.com|X,facebook.com|Facebook,kick.com|Kick,twitch.tv|Twitch,"
-                  "vimeo.com|Vimeo,dailymotion.com|Dailymotion,reddit.com|Reddit,rumble.com|Rumble,odysee.com|Odysee,"
-                  "streamable.com|Streamable,archive.org|Internet Archive,drive.google.com|Google Drive")
-# Accepted as source pages too, but not listed: twitter.com (old X addresses).
-QUIET_SITES = [h.strip().lower().lstrip(".") for h in (os.environ.get("QUIET_SITES") or "twitter.com").split(",") if h.strip()]
+_DEFAULT_SITES = ("youtube.com|YouTube,tiktok.com|TikTok,x.com|X,facebook.com|Facebook,twitch.tv|Twitch,kick.com|Kick,"
+                  "reddit.com|Reddit,drive.google.com|Google Drive")
+# Reddit: no API key can be had any more (Reddit stopped taking new Data API requests on 31 Oct 2026), so the server
+# reads a post's public data without one; see docs/BEKLEYENLER.md.
+# Accepted as source pages too, but not listed: old X addresses, and sites whose links still play (in sync) when pasted.
+QUIET_SITES = [h.strip().lower().lstrip(".") for h in (os.environ.get("QUIET_SITES") or "twitter.com,vimeo.com,archive.org").split(",") if h.strip()]
 ALLOWED_SITES: list[dict] = []
 for _item in (os.environ.get("ALLOWED_SITES") or _DEFAULT_SITES).split(","):
     _dom, _, _name = _item.strip().partition("|")
@@ -77,6 +85,7 @@ for _item in (os.environ.get("ALLOWED_SITES") or _DEFAULT_SITES).split(","):
 _DEFAULT_BLOCKED = ("netflix.com,disneyplus.com,primevideo.com,amazon.com,max.com,hbomax.com,blutv.com,exxen.com,"
                     "gain.com.tr,tabii.com,puhutv.com,mubi.com,tv.apple.com,spotify.com")
 # Rave-style subscription services watched inside the mobile app with each person's own account (services.py, beta).
-# SERVICES_ENABLED=0 turns them off: their links are then blocked like the hosts above.
-SERVICES_ENABLED = os.environ.get("SERVICES_ENABLED", "1").strip().lower() not in ("0", "false", "no", "off")
+# Off since 1.8.3: Nexora offers no DRM / subscription platform (their links are blocked like the hosts above).
+# SERVICES_ENABLED=1 would turn the beta back on.
+SERVICES_ENABLED = os.environ.get("SERVICES_ENABLED", "0").strip().lower() not in ("0", "false", "no", "off")
 BLOCKED_HOSTS = [h.strip().lower().lstrip(".") for h in (os.environ.get("BLOCKED_HOSTS") or _DEFAULT_BLOCKED).split(",") if h.strip()]
