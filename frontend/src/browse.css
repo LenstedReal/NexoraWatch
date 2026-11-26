@@ -69,3 +69,8 @@
   .bs-top{padding:10px 12px}
   .bs-body{padding:20px 22px 22px}
 }
+
+/* 1.8.4: back from the site without clipboard access, the paste button is pointed out (a few soft pulses) */
+.bs-paste.nudge{animation:bs-nudge 1.4s ease-in-out 3}
+@keyframes bs-nudge{0%,100%{box-shadow:0 0 0 0 #ec489900}50%{box-shadow:0 0 0 6px #ec489955}}
+@media(prefers-reduced-motion:reduce){.bs-paste.nudge{animation:none;box-shadow:0 0 0 3px #ec489966}}

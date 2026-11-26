@@ -32,6 +32,10 @@ export type DetectedMedia = {
   key?: string;
   /** when it was found: newer first among equals */
   at?: number;
+  /** a live stream (Twitch channel, Kick channel): everyone watches live */
+  live?: boolean;
+  /** the title is only the page's (a feed's "Reddit – …"): a real one (the post's) replaces it */
+  weak?: boolean;
 };
 
 /**
@@ -45,11 +49,18 @@ export type DetectedMedia = {
  *          The room plays TikTok in its official player and an X post's video file (found by the server), in sync.
  * Kick's player loads its stream inside a worker, where none of this can look: on a Kick page the address its player
  * gets (a live channel's, a recording's, a clip's) is asked from Kick's own API (same origin, the person's session).
+ * Kick's other videos (the home page's 10-second previews) are never reported.
+ *   item   also Reddit: the posts on screen with a Reddit video give their title (the feed's page title is the site's).
+ * Sites whose page itself is offered (YouTube, Vimeo, Twitch, Facebook, Instagram, X) get no fetch / XHR hooks at all:
+ * nothing there is read from the network, and their pages run exactly as in a browser.
  */
 const DETECTOR = String.raw`(function(){
 if(window.__nxDetector)return;window.__nxDetector=true;
 var seen={},top=window.top===window;
 var host=location.hostname.replace(/^(www|m|mobile)\./,''),tiktok=host==='tiktok.com',xsite=host==='x.com'||host==='twitter.com';
+var reddit=host==='reddit.com'||/\.reddit\.com$/.test(host),kick=host==='kick.com';
+var official=/(^|\.)(youtube\.com|youtu\.be|youtube-nocookie\.com|vimeo\.com|twitch\.tv|facebook\.com|instagram\.com|x\.com|twitter\.com)$/.test(location.hostname);
+var hook=!official&&!kick;
 var RX=/\.(m3u8|mp4|webm|mov|m4v)(\?|#|$)/i;
 var SKIP=/(\.ts|\.m4s|\.aac|\.vtt|\.jpg|\.png)(\?|#|$)|\/init\.mp4|segment|\/seg-|\/frag/i;
 var API=/\/api\//;
@@ -92,6 +103,7 @@ function scanJson(text){
   try{walk(JSON.parse(text),0,{n:60000});}catch(e){}
 }
 var of=null;
+if(hook){
 try{of=window.fetch;if(of){window.fetch=function(i){
   var u=typeof i==='string'?i:(i&&i.url);
   try{check(u,'fetch')}catch(e){}
@@ -108,7 +120,9 @@ XP.send=function(){
   return os.apply(this,arguments);
 };}catch(e){}
 try{new PerformanceObserver(function(l){l.getEntries().forEach(function(en){check(en.name,'net')})}).observe({type:'resource',buffered:true})}catch(e){}
+}
 function scan(){
+  if(!hook)return;
   try{
     var vs=document.querySelectorAll('video');
     for(var i=0;i<vs.length;i++){
@@ -132,14 +146,16 @@ function scanTikTok(){
       var r=as[i].getBoundingClientRect();
       if(r.bottom>0&&r.top<vh)item(m[2],m[1],as[i].getAttribute('title')||'');
     }
-    var vs=document.querySelectorAll('video');
+    var vs=document.querySelectorAll('video'),best=null,score=0;
     for(var j=0;j<vs.length;j++){
-      var v=vs[j];if(v.paused||v.readyState<2)continue;
-      for(var el=v,d=0;el&&d<10;el=el.parentElement,d++){
-        var idm=(el.id||'').match(/(\d{15,21})/);
-        if(idm){item(idm[1],'','',true);return;}
-        if(d<=4&&el.querySelector){var a=el.querySelector('a[href*="/video/"]'),hm=a&&(a.getAttribute('href')||'').match(VID);if(hm){item(hm[2],hm[1],'',true);return;}}
-      }
+      var v=vs[j],vr=v.getBoundingClientRect(),vis=Math.max(0,Math.min(vr.bottom,vh)-Math.max(vr.top,0));
+      if(!v.paused&&v.readyState>=2)vis+=vh;
+      if(vis>score){score=vis;best=v;}
+    }
+    for(var el=best,d=0;el&&d<10;el=el.parentElement,d++){
+      var idm=(el.id||'').match(/(\d{15,21})/);
+      if(idm){item(idm[1],'','',true);return;}
+      if(d<=4&&el.querySelector){var a=el.querySelector('a[href*="/video/"]'),hm=a&&(a.getAttribute('href')||'').match(VID);if(hm){item(hm[2],hm[1],'',true);return;}}
     }
   }catch(e){}
 }
@@ -172,11 +188,31 @@ function scanX(){
     }
   }catch(e){}
 }
+var ritems={};
+function scanReddit(){
+  if(!reddit)return;
+  try{
+    var vh=window.innerHeight||800,ps=document.querySelectorAll('shreddit-post');
+    for(var i=0;i<ps.length&&i<60;i++){
+      var p=ps[i],pl=p.querySelector('shreddit-player-2,shreddit-player');
+      var src=(pl&&pl.getAttribute('src'))||'',m=(src+' '+(p.getAttribute('content-href')||'')).match(/v\.redd\.it\/([a-z0-9]{5,20})/i);
+      if(!m)continue;
+      var r=p.getBoundingClientRect();if(r.bottom<=0||r.top>=vh)continue;
+      var id=m[1].toLowerCase(),t=(p.getAttribute('post-title')||'').replace(/\s+/g,' ').trim().slice(0,120),perm=p.getAttribute('permalink')||'';
+      if(ritems[id]===t+src)continue;ritems[id]=t+src;
+      post({t:'item',site:'reddit',id:id,title:t,src:/^https:\/\/[\w.]*v\.redd\.it\//.test(src)?src:'',page:/^\/r\//.test(perm)?location.origin+perm:location.href,current:false});
+    }
+  }catch(e){}
+}
 function api(u,pick,how){
   try{
     (of||window.fetch).call(window,u,{credentials:'include',headers:{accept:'application/json'}})
       .then(function(r){return r.ok?r.json():null})
-      .then(function(j){var v=null;try{v=j&&pick(j)}catch(e){}if(typeof v==='string'&&/^https?:/.test(v))report(v,how)})
+      .then(function(j){
+        var v=null;try{v=j&&pick(j)}catch(e){}
+        if(v&&typeof v==='object'&&typeof v.url==='string'&&/^https?:/.test(v.url))report(v.url,how,{title:String(v.title||''),name:String(v.name||''),live:!!v.live});
+        else if(typeof v==='string'&&/^https?:/.test(v))report(v,how);
+      })
       .catch(function(){});
   }catch(e){}
 }
@@ -187,11 +223,19 @@ function extract(){
   try{
     if(host!=='kick.com')return;
     var p=location.pathname,m;
-    if((m=p.match(/\/videos?\/([0-9a-f-]{36})/i)))api('/api/v1/video/'+m[1],function(j){return j.source},'kick');
+    if((m=p.match(/\/videos?\/([0-9a-f-]{36})/i)))api('/api/v1/video/'+m[1],function(j){
+      var ls=j.livestream||{},ch=ls.channel||{},u=ch.user||{};
+      return {url:j.source,title:ls.session_title||'',name:u.username||ch.slug||''};
+    },'kick');
     else if((m=location.search.match(/[?&]clip=(clip_[\w-]+)/)||p.match(/\/clips?\/(clip_[\w-]+)/)))
-      api('/api/v2/clips/'+m[1],function(j){return j.clip&&(j.clip.clip_url||j.clip.video_url)},'kick');
-    else if((m=p.match(/^\/([\w-]{3,40})\/?$/))&&!KSKIP[m[1].toLowerCase()])
-      api('/api/v2/channels/'+m[1],function(j){return j.livestream&&j.playback_url},'kick');
+      api('/api/v2/clips/'+m[1],function(j){var c=j.clip||{},ch=c.channel||{};return {url:c.clip_url||c.video_url,title:c.title||'',name:ch.username||ch.slug||''};},'kick');
+    else if((m=p.match(/^\/([\w-]{3,40})\/?$/))&&!KSKIP[m[1].toLowerCase()]){
+      var slug=m[1];
+      api('/api/v2/channels/'+slug,function(j){
+        if(!j.livestream)return null;
+        return {url:j.playback_url,title:j.livestream.session_title||'',name:(j.user&&j.user.username)||slug,live:true};
+      },'kick');
+    }
   }catch(e){}
 }
 var lastHref='',lastTitle='';
@@ -202,8 +246,8 @@ function nav(){
 }
 try{['pushState','replaceState'].forEach(function(k){var o=history[k];if(!o)return;history[k]=function(){var r=o.apply(this,arguments);setTimeout(nav,0);return r;};});
 window.addEventListener('popstate',function(){setTimeout(nav,0)});}catch(e){}
-function tick(){scan();scanTikTok();scanX();nav();}
-document.addEventListener('play',function(e){if(e.target&&e.target.tagName==='VIDEO'){scan();scanTikTok();scanX();}},true);
+function tick(){scan();scanTikTok();scanX();scanReddit();nav();}
+document.addEventListener('play',function(e){if(e.target&&e.target.tagName==='VIDEO'){scan();scanTikTok();scanX();scanReddit();}},true);
 document.addEventListener('DOMContentLoaded',tick);
 setInterval(tick,1500);
 })();true;`;
@@ -267,8 +311,11 @@ export function pageOffer(url: string, title: string, fallbackTitle: string): De
   if (tv) return { url: `https://www.twitch.tv/videos/${tv[1]}`, kind: "twitch", page: url, title: title || "Twitch", how: "page" };
   const tl = url.match(TWITCH_LIVE_RE);
   if (tl && !TWITCH_PAGES.has(tl[1].toLowerCase())) {
-    // A live channel: everyone watches live in Twitch's player, the room follows play / pause.
-    return { url: `https://www.twitch.tv/${tl[1].toLowerCase()}`, kind: "twitch", page: url, title: title || `Twitch · ${tl[1]}`, how: "page", key: `twitch:${tl[1].toLowerCase()}` };
+    // A live channel: everyone watches live in Twitch's player, the room follows play / pause. Its name as Twitch writes
+    // it ("PoineMaia - Twitch"); the address has it in small letters and the page's title is often just "Twitch".
+    const shown = title.replace(/\s*[-–|·]\s*Twitch\s*$/i, "").trim();
+    const name = shown.toLowerCase() === tl[1].toLowerCase() ? shown : tl[1];
+    return { url: `https://www.twitch.tv/${name}`, kind: "twitch", page: url, title: `${name} · Twitch`, how: "page", key: `twitch:${tl[1].toLowerCase()}`, live: true };
   }
   // Instagram is not offered: its player cannot be kept together. Kick and Reddit: the file their page plays is offered.
   const xm = url.match(X_RE);
@@ -282,6 +329,40 @@ export function pageOffer(url: string, title: string, fallbackTitle: string): De
   return null;
 }
 const MAX_ITEMS = 20;
+
+// Reddit's player loads one video as many files (the main playlist, each quality's playlist, picture-only and
+// sound-only files). One row per video: its main playlist (picture and sound), with the post's title when known.
+const REDDIT_FILE = /^(https:\/\/(?:[\w-]+\.)?v\.redd\.it\/([a-z0-9]{5,20})\/)([^?#]*)(\?[^#]*)?/i;
+// Reddit's "packaged" MP4 (picture and sound in one file), played by its mobile site for some posts.
+const REDDIT_PACKAGED = /^https:\/\/packaged-media\.redd\.it\/([a-z0-9]{5,20})\/[^?#]*\.mp4(?:[?#]|$)/i;
+export function redditMedia(url: string): { url: string; key: string } | null {
+  const pk = url.match(REDDIT_PACKAGED);
+  if (pk) return { url, key: `reddit:${pk[1].toLowerCase()}` };
+  const m = url.match(REDDIT_FILE);
+  if (!m) return null;
+  const file = m[3];
+  // the main playlist as found; else the one next to a quality's playlist (same folder, same signature)
+  const master = /^hlsplaylist\.m3u8$/i.test(file) ? url : /^hls_\d{3,4}\.m3u8$/i.test(file) ? `${m[1]}HLSPlaylist.m3u8${m[4] || ""}` : null;
+  return master ? { url: master, key: `reddit:${m[2].toLowerCase()}` } : null;
+}
+
+/** A Reddit post on screen: the title for its video's row, or the row itself when the page names the playlist. */
+export function redditItem(id: string, title: string, src: string, page: string): DetectedMedia | null {
+  if (!/^[a-z0-9]{5,20}$/i.test(id)) return null;
+  const media = src ? redditMedia(src) : null;
+  return { url: media?.url ?? "", kind: "hls", page, title: title.slice(0, 120), how: "feed", key: `reddit:${id.toLowerCase()}` };
+}
+
+/** Kick's own player gets its stream from Kick's API: a live channel, a recording or a clip, with its name. */
+export function kickTitle(name: string, title: string, live: boolean, liveWord: string): string {
+  const who = name.trim();
+  const what = title.replace(/\s+/g, " ").trim();
+  return (who && what ? `${who} — ${what}` : who ? (live ? `${who} · ${liveWord}` : `${who} · Kick`) : what || "Kick").slice(0, 120);
+}
+
+// Links that only open an app or its store page: refused quietly, the page stays where it was.
+const APP_LINK = /^https?:\/\/(?:play\.google\.com|apps\.apple\.com|itunes\.apple\.com|[\w-]+\.onelink\.me|[\w-]+\.app\.link|app\.adjust\.com|[\w-]+\.adj\.st|[\w-]+\.sng\.link)(?:[/?#]|$)/i;
+export const isAppLink = (url: string) => APP_LINK.test(url) || !/^https?:/i.test(url);
 
 export function hostOf(url: string): string {
   const m = url.match(/^https?:\/\/([^/?#:]+)/i);
@@ -321,13 +402,16 @@ export function rank(m: DetectedMedia, current?: string | null): number {
 /** Adds a found video, or improves the one already listed (a feed item gets its caption, a repeat stays one row). */
 export function mergeFound(prev: DetectedMedia[], item: DetectedMedia, max = MAX_ITEMS): DetectedMedia[] {
   const k = item.key ?? item.url;
-  const i = prev.findIndex((p) => (p.key ?? p.url) === k || p.url === item.url || (item.kind === "blocked" && p.kind === "blocked"));
+  const i = prev.findIndex((p) => (p.key ?? p.url) === k || (!!item.url && p.url === item.url) || (item.kind === "blocked" && p.kind === "blocked"));
   if (i >= 0) {
     const old = prev[i];
-    const title = item.title && (!old.title || /^(@[\w.-]+|TikTok|X)$/.test(old.title)) ? item.title : old.title;
-    if (title === old.title) return prev;
+    const weakOld = !old.title || !!old.weak || /^(@[\w.-]+|TikTok|X)$/.test(old.title);
+    const better = !!item.title && weakOld && (!item.weak || !old.title);
+    const title = better ? item.title : old.title;
+    const url = old.url || item.url;
+    if (title === old.title && url === old.url) return prev;
     const next = [...prev];
-    next[i] = { ...old, title };
+    next[i] = { ...old, title, url, weak: better ? item.weak : old.weak };
     return next;
   }
   return [...prev, { ...item, at: item.at ?? Date.now() }].slice(-max);
@@ -358,6 +442,7 @@ export function BrowserModal({
   const [webKey, setWebKey] = useState(0); // a new WebView after Android killed the page (see recover)
   const pageHost = useRef("");
   const lastPage = useRef<string | null>(null);
+  const loaded = useRef(false); // a page of the opened site has loaded (a refused link then leaves it on screen)
 
   useEffect(() => {
     // Drive needs a Google sign-in, which Google blocks inside in-app browsers: Drive links are added by pasting
@@ -371,8 +456,9 @@ export function BrowserModal({
     return () => clearTimeout(timer);
   }, [notice]);
 
+  // A row is listed once it has something to play (a Reddit post's title can arrive before its playlist).
   const sorted = useMemo(
-    () => [...found].sort((a, b) => rank(a, current) - rank(b, current) || (b.at ?? 0) - (a.at ?? 0)),
+    () => found.filter((m) => !!m.url).sort((a, b) => rank(a, current) - rank(b, current) || (b.at ?? 0) - (a.at ?? 0)),
     [found, current],
   );
   const shareable = sorted.filter((m) => m.kind !== "blocked");
@@ -409,6 +495,7 @@ export function BrowserModal({
     setListOpen(false);
     pageHost.current = host;
     lastPage.current = target;
+    loaded.current = false;
     setUrl(target);
     setAddress(target);
   };
@@ -432,6 +519,13 @@ export function BrowserModal({
   };
 
   const remove = (u: string) => setFound((prev) => prev.filter((x) => x.url !== u));
+
+  // The start page: typing filters the sites and offers the search (or the address) right away.
+  const typed = !url ? address.trim() : "";
+  const looksAddress = /^https?:\/\//i.test(typed) || /^[\w-]+(\.[\w-]+)+(\/.*)?$/.test(typed);
+  const shownSites = typed && !looksAddress
+    ? sites.filter((x) => x.name.toLowerCase().includes(typed.toLowerCase()) || x.domain.includes(typed.toLowerCase()))
+    : sites;
 
   return (
     <Modal visible={visible} animationType="slide" onRequestClose={back} presentationStyle="fullScreen" statusBarTranslucent>
@@ -480,10 +574,19 @@ export function BrowserModal({
         <View style={{ flex: 1 }}>
           {!url ? (
             <ScrollView contentContainerStyle={{ padding: 16, gap: 14 }}>
+              {!!typed && (
+                <Pressable onPress={submitAddress} style={({ pressed }) => [styles.searchRow, pressed && { opacity: 0.8 }]} accessibilityRole="button">
+                  <Ionicons name={looksAddress ? "globe-outline" : "logo-youtube"} size={18} color={looksAddress ? C.cyan : "#ff4e45"} />
+                  <Text style={styles.searchText} numberOfLines={1}>
+                    {t(looksAddress ? "b_open_addr" : "b_search_yt", { q: typed })}
+                  </Text>
+                  <Ionicons name="arrow-forward" size={16} color={C.muted} />
+                </Pressable>
+              )}
               <Text style={styles.startTitle}>{t("b_title")}</Text>
               <Text style={styles.startSub}>{t("b_sub")}</Text>
               <View style={styles.grid}>
-                {sites.map((s) => (
+                {shownSites.map((s) => (
                   <Pressable key={s.domain} onPress={() => open(`https://${s.domain === "youtube.com" ? "m.youtube.com" : s.domain}`)} style={({ pressed }) => [styles.site, pressed && { opacity: 0.8 }]}>
                     <View style={styles.siteIcon}>
                       <Text style={styles.siteLetter}>{s.name.slice(0, 1)}</Text>
@@ -512,14 +615,20 @@ export function BrowserModal({
               injectedJavaScriptForMainFrameOnly={false}
               injectedJavaScriptBeforeContentLoadedForMainFrameOnly={false}
               onShouldStartLoadWithRequest={(r) => {
-                if (!/^https?:/i.test(r.url)) return false; // intent://, market:// etc.
-                if ((r as any).isTopFrame === false) return true;
                 if (r.url === "about:blank") return true;
+                const top = (r as any).isTopFrame !== false;
+                if (isAppLink(r.url)) {
+                  // "Open the app" buttons (intent://, the store, app links): refused, the page stays as it was.
+                  if (top && /^https?:/i.test(r.url)) setNotice(t("b_app_link"));
+                  return !top && /^https?:/i.test(r.url) ? true : false;
+                }
+                if (!top) return true;
                 const host = hostOf(r.url);
                 if (isAllowedHost(host, sites) || HELPER_HOSTS.includes(host)) return true;
                 setNotice(host === "accounts.google.com" ? t("b_no_login") : t("b_blocked_nav"));
-                // Nothing loaded yet (the site redirected straight away): go back to the site list, not a black page.
-                if (!nav.back) {
+                // Nothing loaded yet (the site redirected straight away): back to the site list, not a black page.
+                // Once a page of the site is on screen it stays there.
+                if (!loaded.current) {
                   setUrl(null);
                   setAddress("");
                 }
@@ -528,6 +637,7 @@ export function BrowserModal({
               onNavigationStateChange={(s) => {
                 setNav({ back: s.canGoBack, fwd: s.canGoForward, loading: s.loading });
                 if (s.loading) return;
+                if (/^https?:/i.test(s.url)) loaded.current = true;
                 setAddress(s.url);
                 if (/^https?:/i.test(s.url)) lastPage.current = s.url;
                 const host = hostOf(s.url);
@@ -556,6 +666,14 @@ export function BrowserModal({
                   offerPage(m.url, String(m.title || ""));
                   return;
                 }
+                if (m?.t === "item" && m.site === "reddit" && typeof m.id === "string") {
+                  // A Reddit post on screen: its title (and playlist, when the page names it) for the video's row.
+                  const page = String(m.page || "");
+                  if (!isAllowedHost(hostOf(page), sites)) return;
+                  const it = redditItem(m.id, String(m.title || ""), typeof m.src === "string" ? m.src : "", page);
+                  if (it) addItem(it);
+                  return;
+                }
                 if (m?.t === "item" && (m.site === "tiktok" || m.site === "x") && typeof m.id === "string") {
                   // A video of a feed: TikTok's (its official player) or an X post (its video file), in sync.
                   const page = String(m.page || "");
@@ -572,12 +690,28 @@ export function BrowserModal({
                 if (!isAllowedHost(hostOf(page), sites)) return;
                 // Official-player sites: the page itself is offered instead (pageOffer, above).
                 if (isOfficialHost(hostOf(page)) || isPartialStream(m.url)) return;
+                const how = String(m.how || "");
+                const ph = hostOf(page);
+                if (how === "kick") {
+                  // A Kick channel, recording or clip, as Kick's API names it (never the site's 10-second previews).
+                  addItem({ url: m.url, kind: classify(m.url, false), page, how, live: !!m.live,
+                    title: kickTitle(String(m.name || ""), String(m.title || ""), !!m.live, t("b_live_word")),
+                    key: `kick:${m.url.split("?")[0]}` });
+                  return;
+                }
+                if (ph === "kick.com" || ph.endsWith(".kick.com")) return;
+                const rd = /(^|\.)redd\.it$/.test(hostOf(m.url)) ? redditMedia(m.url) : null;
+                if (/(^|\.)redd\.it$/.test(hostOf(m.url))) {
+                  if (!rd) return; // a quality's file, picture or sound only: the main playlist is the row
+                  addItem({ url: rd.url, kind: classify(rd.url, false), page, how, key: rd.key, weak: true, title: String(m.title || "").slice(0, 120) });
+                  return;
+                }
                 addItem({
                   url: m.url,
                   kind: classify(m.url, !!m.blocked),
                   page,
                   title: String(m.title || "").slice(0, 120),
-                  how: String(m.how || ""),
+                  how,
                   duration: typeof m.duration === "number" ? m.duration : undefined,
                 });
               }}
@@ -616,8 +750,8 @@ export function BrowserModal({
                     <View style={{ flex: 1, gap: 3 }}>
                       <View style={{ flexDirection: "row", gap: 6, alignItems: "center" }}>
                         <Badge
-                          text={item.kind === "blocked" ? t("b_protected") : item.kind.toUpperCase()}
-                          color={item.kind === "blocked" ? C.error : item.kind === "hls" || PAGE_KINDS.has(item.kind) ? C.cyan : C.purple}
+                          text={item.kind === "blocked" ? t("b_protected") : item.live ? t("b_live") : item.kind.toUpperCase()}
+                          color={item.kind === "blocked" || item.live ? C.error : item.kind === "hls" || PAGE_KINDS.has(item.kind) ? C.cyan : C.purple}
                         />
                         {!!item.duration && item.duration > 0 && (
                           <Text style={styles.meta}>
@@ -629,7 +763,7 @@ export function BrowserModal({
                         {item.title || hostOf(item.page)}
                       </Text>
                       <Text style={styles.meta} numberOfLines={1}>
-                        {item.kind === "blocked" ? t("b_protected_d") : hostOf(item.url)}
+                        {item.kind === "blocked" ? t("b_protected_d") : hostOf(item.page) || hostOf(item.url)}
                       </Text>
                     </View>
                     {item.kind !== "blocked" && (
@@ -664,6 +798,8 @@ export function BrowserModal({
 }
 
 const styles = StyleSheet.create({
+  searchRow: { flexDirection: "row", alignItems: "center", gap: 10, paddingHorizontal: 14, paddingVertical: 13, borderRadius: R.lg, backgroundColor: C.card, borderWidth: 1, borderColor: C.border },
+  searchText: { flex: 1, color: C.text, fontSize: 14, fontWeight: "700" },
   bar: { flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: 10, paddingBottom: 8, backgroundColor: C.card, borderBottomWidth: 1, borderBottomColor: C.border },
   address: { flex: 1, flexDirection: "row", alignItems: "center", gap: 8, backgroundColor: C.input, borderRadius: R.pill, paddingHorizontal: 14, height: 42 },
   addrInput: { flex: 1, color: C.text, fontSize: 14, paddingVertical: 0 },

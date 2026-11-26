@@ -1,6 +1,5 @@
 import { useState } from "react";
 import { Link2, Upload, Loader2, Film, PlayCircle, Globe } from "lucide-react";
-import { toast } from "sonner";
 import { errorText, useT } from "@/i18n";
 import { api } from "@/lib/api";
 import { UploadPanel } from "./UploadPanel";
@@ -35,8 +34,7 @@ export const SourcePanel = ({ code, ident, video, upload, drive, pick, onRoom })
       await bring(url.trim());
       setUrl("");
     } catch (ex) {
-      setErr(ex);
-      toast.error(errorText(t, ex));
+      setErr(ex); // shown once, right under the field it is about (no second copy as a toast)
     } finally {
       setBusy(false);
     }

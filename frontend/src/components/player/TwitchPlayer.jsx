@@ -1,16 +1,15 @@
-import { useEffect, useRef, useState } from "react";
-import { Smartphone } from "lucide-react";
-import { useT } from "@/i18n";
-import { inApp, setOrientation } from "@/lib/native";
+import { useEffect, useRef } from "react";
 import "@/embeds.css";
 
 // Twitch plays in Twitch's own interactive embed (https://dev.twitch.tv/docs/embed/video-and-clips/).
 // Twitch's embed rules (https://dev.twitch.tv/docs/embed/): the player must be at least 400x300 and must not be
 // covered by other page elements. So the room draws nothing on top of it (Stage.jsx: no lock, chips or buttons over
-// it; the buttons sit in the bar under the picture). A smaller picture area (a portrait phone) shows a "turn the
-// phone" note instead of a player; turned sideways the player starts at the room's position.
+// it; the buttons sit in the bar under the picture).
+// A portrait phone's picture area is smaller than 400x300 (about 360x203). The embed is then laid out at 400x300 CSS
+// pixels or more and drawn smaller with CSS zoom, which the browser carries into the frame (Chrome / Android WebView
+// since 128): Twitch's page inside measures at least 400x300, the whole player is visible and nothing covers it, so it
+// plays in portrait too. Without zoom (old browsers) a scale is used; Twitch may then wait for a tap on its own button.
 export const TWITCH_MIN = { w: 400, h: 300 };
-export const TWITCH_TINY = 200;
 
 /** CSS size of the embed (never below Twitch's minimum) and the scale that fits it into a w x h area. */
 export function twitchFit(w, h) {
@@ -18,6 +17,8 @@ export function twitchFit(w, h) {
   // No rounding up: the drawn size (CSS size x s) must stay inside the area; max() guards against float error.
   return { s, w: Math.max(TWITCH_MIN.w, w / s), h: Math.max(TWITCH_MIN.h, h / s) };
 }
+
+const ZOOM = typeof window !== "undefined" && typeof window.CSS?.supports === "function" && window.CSS.supports("zoom", "0.5");
 
 let sdk;
 function loadTwitch() {
@@ -42,42 +43,41 @@ function loadTwitch() {
 let seq = 0;
 
 export const TwitchPlayer = ({ video, playerRef, events, onFatal }) => {
-  const t = useT();
   const hostRef = useRef(null);
   const evRef = useRef(events);
   evRef.current = events;
-  const [big, setBig] = useState(null); // null = not measured yet; false = area narrower than TWITCH_TINY
   const mountRef = useRef(null);
   const live = !!video.live;
   const vod = video.video_id;
   const channel = video.channel;
 
-  // Sizes the embed to the picture area: at least 400x300 CSS pixels, scaled down to fit when the area is smaller.
+  // Sizes the embed to the picture area: at least 400x300 CSS pixels, drawn smaller when the area is smaller.
   const fit = () => {
     const el = hostRef.current, m = mountRef.current;
-    if (!el || !m) return;
-    // Twitch's rule is a visible player of at least 400x300, so it is never scaled down: below that a note is shown.
-    m.style.width = "100%";
-    m.style.height = "100%";
-    m.style.transform = "";
+    if (!el || !m || !el.clientWidth || !el.clientHeight) return;
+    const f = twitchFit(el.clientWidth, el.clientHeight);
+    if (f.s >= 1) {
+      m.style.width = "100%";
+      m.style.height = "100%";
+      m.style.zoom = "";
+      m.style.transform = "";
+      return;
+    }
+    m.style.width = `${f.w}px`;
+    m.style.height = `${f.h}px`;
+    m.style.zoom = ZOOM ? String(f.s) : "";
+    m.style.transform = ZOOM ? "" : `scale(${f.s})`;
   };
   const fitRef = useRef(fit);
   fitRef.current = fit;
 
   useEffect(() => {
-    const el = hostRef.current;
-    const measure = () => {
-      setBig(el.clientWidth >= TWITCH_MIN.w && el.clientHeight >= TWITCH_MIN.h);
-      fitRef.current();
-    };
-    measure();
-    const ro = new ResizeObserver(measure);
-    ro.observe(el);
+    const ro = new ResizeObserver(() => fitRef.current());
+    ro.observe(hostRef.current);
     return () => ro.disconnect();
   }, []);
 
   useEffect(() => {
-    if (!big) return undefined;
     let cancelled = false;
     let player;
     const mount = document.createElement("div");
@@ -163,17 +163,7 @@ export const TwitchPlayer = ({ video, playerRef, events, onFatal }) => {
       if (mountRef.current === mount) mountRef.current = null;
       mount.remove(); // the embed has no documented destroy(); removing its element stops it
     };
-  }, [big, live, vod, channel, playerRef, onFatal]);
+  }, [live, vod, channel, playerRef, onFatal]);
 
-  return (
-    <div ref={hostRef} className="tw-host" data-testid="twitch-player">
-      {big === false && (
-        <div className="tw-small" data-testid="twitch-too-small">
-          <Smartphone size={26} />
-          <b>{t("twitch_small")}</b>
-          {inApp() && <button className="btn" onClick={() => setOrientation("landscape")} data-testid="twitch-rotate-btn">{t("rotate")}</button>}
-        </div>
-      )}
-    </div>
-  );
+  return <div ref={hostRef} className="tw-host" data-testid="twitch-player" />;
 };

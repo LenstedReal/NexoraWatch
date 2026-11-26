@@ -107,7 +107,8 @@ export const PlayerControls = memo(function PlayerControls({ media, stageRef, is
   const menuEl = useRef(null);
   const gearEl = useRef(null);
 
-  const canPip = typeof document !== "undefined" && !!document.pictureInPictureEnabled && typeof el.requestPictureInPicture === "function";
+  const doc = el.ownerDocument || document; // the no-Referer frame's own document when the file plays there (HtmlPlayer)
+  const canPip = typeof document !== "undefined" && !!doc.pictureInPictureEnabled && typeof el.requestPictureInPicture === "function";
   const seekable = hasDur && !live;
 
   // ---- time, progress and buffer: written to the DOM directly ----
@@ -194,10 +195,10 @@ export const PlayerControls = memo(function PlayerControls({ media, stageRef, is
   }, [el, onMuted]);
   const togglePip = useCallback(() => {
     try {
-      const p = document.pictureInPictureElement ? document.exitPictureInPicture() : el.requestPictureInPicture();
+      const p = doc.pictureInPictureElement ? doc.exitPictureInPicture() : el.requestPictureInPicture();
       if (p && p.catch) p.catch(() => {});
     } catch { /* not allowed right now */ }
-  }, [el]);
+  }, [el, doc]);
 
   // The person's own sound settings come back on this device. A chosen mute is not the browser's autoplay mute.
   useEffect(() => {

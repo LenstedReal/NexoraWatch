@@ -6,8 +6,9 @@ import { useAppConfig } from "@/lib/config";
 import "@/browse.css";
 
 // "Browse sites & find a video" on the web. The mobile app opens the supported site inside its own browser and finds
-// the video itself. A web page cannot read another site, so here the site opens in a new tab and the person brings
-// the link back: by the paste button, by typing it, or (once clipboard access was allowed) it is offered on return.
+// the video itself. On the web the site opens next to Nexora (its app or a new tab) and its Share → Copy link is all
+// it takes: coming back, a newly copied link goes to the room by itself once the browser lets Nexora read the
+// clipboard; until then one tap on the paste button does it (1.8.4).
 
 const isUrl = (s) => /^https?:\/\/\S+$/i.test(s);
 const isDomain = (s) => /^[\w-]+(\.[\w-]+)+(\/\S*)?$/.test(s);
@@ -55,11 +56,16 @@ export function BrowseSheet({ onClose, onBring }) {
   const [link, setLink] = useState("");
   const [found, setFound] = useState(null); // a link seen on the clipboard, waiting for a click
   const [hint, setHint] = useState("");
+  const [nudge, setNudge] = useState(false); // back from the site without clipboard access: the paste button is pointed out
   const [err, setErr] = useState(null);
   const [busy, setBusy] = useState(false);
   const boxRef = useRef(null);
   const linkRef = useRef(null);
   const offered = useRef("");
+  const lastClip = useRef(null); // the clipboard as last read
+  const atOpen = useRef(null); // what it held when a site was opened: an old link is not the new video
+  const siteRef = useRef(null);
+  siteRef.current = site;
   const alive = useRef(true);
   const busyRef = useRef(false);
   const closeRef = useRef(onClose);
@@ -102,14 +108,22 @@ export function BrowseSheet({ onClose, onBring }) {
     };
   }, []);
 
-  // Coming back from the other tab: when clipboard access is already allowed, a copied link is offered (never set).
+  // Coming back from the site: when clipboard access is already allowed, a link copied there goes to the room by
+  // itself (an older one is only offered). Without access the paste button is pointed out: one tap brings it.
   useEffect(() => {
     const look = async () => {
-      if (document.visibilityState !== "visible" || !(await clipboardAllowed())) return;
+      if (document.visibilityState !== "visible" || busyRef.current) return;
+      if (!(await clipboardAllowed())) {
+        if (alive.current && siteRef.current) setNudge(true);
+        return;
+      }
       const res = await readClipboard();
-      if (!alive.current || !res.text || !isUrl(res.text) || res.text === offered.current) return;
+      if (!alive.current || !res.text) return;
+      lastClip.current = res.text;
+      if (!isUrl(res.text) || res.text === offered.current) return;
       offered.current = res.text;
-      setFound(res.text);
+      if (siteRef.current && res.text !== atOpen.current) bringRef.current(res.text);
+      else setFound(res.text);
     };
     look();
     document.addEventListener("visibilitychange", look);
@@ -128,6 +142,8 @@ export function BrowseSheet({ onClose, onBring }) {
     setBusy(true);
     setErr(null);
     setHint("");
+    setNudge(false);
+    setFound(null);
     try {
       await onBring(url);
       if (alive.current) closeRef.current();
@@ -140,12 +156,16 @@ export function BrowseSheet({ onClose, onBring }) {
       setStep("link");
     }
   }, [onBring]);
+  const bringRef = useRef(bring);
+  bringRef.current = bring;
 
   const toLinkStep = (opened) => {
+    if (opened) atOpen.current = lastClip.current;
     setSite(opened);
     setStep("link");
     setErr(null);
     setHint("");
+    setNudge(false);
   };
 
   const openSite = (s) => {
@@ -192,6 +212,7 @@ export function BrowseSheet({ onClose, onBring }) {
       bring(res.text);
       return;
     }
+    setNudge(false);
     setHint(t(res.reason ? "bs_paste_denied" : "bs_paste_empty"));
     linkRef.current?.focus();
   };
@@ -239,7 +260,6 @@ export function BrowseSheet({ onClose, onBring }) {
                   </button>
                 ))}
               </div>
-              <p className="bs-note" data-testid="browse-web-note">{t("bs_web_note")}</p>
               <div className="bs-legal"><Info size={16} aria-hidden="true" /><span>{t("bs_legal")}</span></div>
             </>
           ) : (
@@ -254,9 +274,10 @@ export function BrowseSheet({ onClose, onBring }) {
                 </ol>
               )}
               {foundCard}
-              <button type="button" className="bs-paste" onClick={paste} disabled={busy} data-testid="browse-paste">
+              <button type="button" className={`bs-paste${nudge ? " nudge" : ""}`} onClick={paste} disabled={busy} data-testid="browse-paste">
                 {busy ? <Loader2 size={18} className="spin" /> : <ClipboardPaste size={18} />} {t("bs_paste")}
               </button>
+              {nudge && <p className="bs-hint" role="status" data-testid="browse-nudge">{t("bs_nudge")}</p>}
               <form className="bs-link" onSubmit={(e) => { e.preventDefault(); bring(link); }}>
                 <input
                   ref={linkRef} value={link} onChange={(e) => setLink(e.target.value)} placeholder={t("bs_link_ph")} aria-label={t("bs_link_ph")}
@@ -267,7 +288,6 @@ export function BrowseSheet({ onClose, onBring }) {
               {hint && <p className="bs-hint" role="status" data-testid="browse-hint">{hint}</p>}
               {err && <p className="bs-err" role="alert" data-testid="browse-error">{errorText(t, err)}</p>}
               {site && <a className="bs-reopen" href={site.url} target="_blank" rel="noopener noreferrer" data-testid="browse-reopen"><ExternalLink size={14} /> {t("bs_reopen")}</a>}
-              <p className="bs-note" data-testid="browse-web-note">{t("bs_web_note")}</p>
             </>
           )}
         </div>

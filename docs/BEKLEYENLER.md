@@ -4,12 +4,14 @@ Bir dış nedenle şimdilik yapılamayan işler. Engel kalkınca buradan devam e
 
 ## Dailymotion kaynağı (beklemede)
 
-**Durum (25 Kasım 2026):** Dailymotion, Türkiye'den yeni hesap açılmasına hâlâ izin vermiyor ("ülkenizde yeni hesap
-oluşturma kullanılamıyor"; ilk deneme 13 Kasım, son deneme 25 Kasım 2026, ikisinde de aynı). Hesap olmadan Player ID
-alınamıyor, bu yüzden Dailymotion eklenmedi. Uygulamada ve sitede Dailymotion hiçbir yerde geçmiyor; kullanıcıya
-yarım bir özellik gösterilmiyor. (1.8.0'da uygulamanın tarayıcısına dosya bulma yoluyla eklenmişti; bu karara aykırı
-olduğu için 1.8.1'de geri alındı.) Hesap kısıtını aşmak için VPN ya da başkasının adına hesap kullanılmayacak:
-Dailymotion'ın kurallarına aykırı olur ve hesap kapatılırsa oynatıcı da kapanır.
+**Durum (26 Kasım 2026):** Hesap açıldı (VPN ile), ama bu hesabın Dailymotion Studio'sunda oynatıcı bölümü yok: solda
+yalnızca Yükle, Medya, Analizler, Ödemeler, Ayarlar var; Ayarlar → Hesap'ta da hesap türü seçeneği görünmüyor.
+Dailymotion'ın belgelerine göre Player ID, Studio'daki "Players" sekmesinden ya da Platform API ile (manage_players
+yetkisi) alınıyor; bu hesapta ikisi de yok. Player ID alınamadığı için Dailymotion eklenmedi. Dailymotion'ın yardım sayfası Players bölümünü "Dailymotion Partner" hesaplarına bağlıyor; yayıncı erişimi Dailymotion Pro ile veriliyor. 26 Kasım 2026'da pro.dailymotion.com (artık dailymotionbusiness.com) sayfası, yalnızca oynatıcı isteyenler için olan aboneliğin yeni müşterilere geçici olarak kapatıldığını yazıyor; diğer seçenek (Edge) yayın kuruluşları için. Abonelik yeniden açılırsa ya da Studio'da Embeds → Players görünürse aşağıdaki adımlarla eklenir. (Önceki durum: 13 ve 25
+Kasım'da Türkiye'den hesap açılamamıştı.) VPN ile açılan hesap Dailymotion'ın kurallarına takılıp kapatılırsa oynatıcı da
+herkeste durur; Player ID alınırsa bu risk bilinerek eklenir (kararı uygulamanın sahibi verdi). Uygulamada ve sitede
+Dailymotion hiçbir yerde geçmiyor; kullanıcıya yarım bir özellik gösterilmiyor. (1.8.0'da uygulamanın tarayıcısına dosya
+bulma yoluyla eklenmişti; bu karara aykırı olduğu için 1.8.1'de geri alındı.)
 
 **Neden Player ID gerekiyor:** Dailymotion'ın resmî oynatıcısı (Player Web SDK) yalnızca bir Player ID ile
 yükleniyor. Oynat, durdur, ileri sar ve konum okuma bu SDK ile yapılıyor; eşitleme bunlarla kurulabiliyor. Resmî
@@ -74,6 +76,32 @@ alınabiliyor ve bu API Cloudflare bot denetiminin arkasında. Sunucudan gelen i
 - Kanal yayında değilse `kick_offline`.
 
 **Yapılacak:** İlk sürümden sonra sitede bir Kick kanalı bağlantısı denenip sunucunun cevap alıp almadığı görülür.
+
+## 1.8.4: gerçek telefonda ve canlı sitelerde denenecekler (bu ortamda yapılamadı)
+
+Bu ortamın internete çıkışı kapalı; canlı X, TikTok, Kick, Twitch ve Reddit sunucularına istek atılamadı. Aşağıdakiler
+taklit sunucularla Chrome 153'te denendi; gerçek sitelerin davranışı telefonda doğrulanmalı.
+
+- **X:** `video.twimg.com` başka sitelerin sayfasından gelen video isteğine 403 veriyor (halka açık raporlar). 1.8.4'te
+  sunucu dosyayı tarayıcının soracağı gibi iki kez sorar: odanın sayfası Referer olarak / Referer olmadan. Yalnızca
+  ikincisi açılıyorsa video `referrer_policy: "no-referrer"` ile işaretlenir ve oda onu Referer göndermeyen bir
+  çerçevede oynatır; tarayıcı ilk denemede reddedilirse oynatıcı da bir kez bu yolla dener. X her iki yolu da
+  reddederse bağlantı yine "yalnızca kendi sayfasında oynatıyor" der: bu X'in engelidir, sunucudan geçirme yapılmaz.
+- **Twitch dik ekran:** Twitch'in sayfası 400×300 veya daha büyük ölçülür (Chrome / Android WebView 128+ CSS zoom'u
+  çerçevenin içine taşır). Daha eski tarayıcıda Twitch kendi oynat düğmesine bir dokunuş isteyebilir.
+- **Kick canlı:** yayın, Kick'in kendi API'sinin verdiği HLS'dir ve kendi oynatıcımızda oynar. Kick sunucumuza kanalı
+  vermezse (bot denetimi) ya da yayın sunucusu başka sitelere CORS izni vermiyorsa canlı kanal Kick'in resmî gömme
+  oynatıcısında açılır (player.kick.com): herkes canlıyı izler. Gömme oynatıcının JavaScript denetimi yok; oda yine de
+  oynat/durdur'u yönetir: oda sahibi durdurunca yayın her telefonda kapanır, oynatınca herkes canlıya döner (oda sahibinin
+  düğmesi oynatıcının altındaki çubukta). Kayıt ve kliplerde böyle bir oynatıcı yok: nedeniyle reddedilir.
+- **TikTok:** bağlantı eklenirken TikTok'un resmî oEmbed'i sorulur. TikTok 400/404 derse (gizli, silinmiş, sahibi
+  gömmeyi kapatmış) bağlantı nedeniyle reddedilir; videonun her telefonda "Video currently unavailable" demesi yerine.
+  Fotoğraf gönderileri (slayt) de nedeniyle reddedilir. TikTok'a ulaşılamazsa hiçbir şey reddedilmez.
+- **YouTube:** bağlantı eklenirken YouTube'un oEmbed'i 401 (gizli, gömme kapalı) ya da 404 (kaldırılmış) derse bağlantı
+  nedeniyle reddedilir. Yaşa sınırlı videoları YouTube gömmede hiç oynatmıyor; bunu ancak oynatıcı söyler.
+- **Oturumlar:** resmî oynatıcılar (YouTube, Twitch, TikTok, Facebook) her izleyicinin kendi tarayıcısındaki oturumla
+  açılır. YouTube'a girişliysen izlediğin video geçmişine düşer (watch2gether'daki gibi); bu bir hata değil. Yalnızca
+  girişle açılan videolar (gizli, kanal üyelerine özel) başkalarında açılmaz; YouTube'da bunlar eklenirken reddedilir.
 
 ## InMobi: Play yayınından sonra yapılacaklar
 

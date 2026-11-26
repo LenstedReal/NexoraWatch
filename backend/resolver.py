@@ -46,7 +46,11 @@ TWITCH_RESERVED = {"directory", "videos", "settings", "downloads", "search", "su
 LIVE_SYNC_CAPS = {"seek": False, "rate_correction": False, "sync": True}
 
 # --- Kick: a live channel, recording or clip plays the HLS playlist Kick's own player plays (Kick's site API names it),
-# in Nexora's player. Kick's embed (player.kick.com/<channel>) has no JavaScript control, so it is not used.
+# in Nexora's player (the room follows play / pause). When that cannot be done for a live channel (Kick refuses our
+# server, or its stream server does not open the playlist to other sites) the channel plays in Kick's official embed
+# (player.kick.com/<channel>, https://help.kick.com/en/articles/8010826-how-to-embed-your-kick-livestream): everyone
+# watches it live and the room still follows play / pause (KickPlayer: a pause takes the stream away on every phone,
+# play brings everyone back to the live edge).
 KICK_HOSTS = {"kick.com", "www.kick.com", "m.kick.com"}
 KICK_CHANNEL = re.compile(r"^/([A-Za-z0-9][A-Za-z0-9_-]{2,39})/?$")
 KICK_VIDEO = re.compile(r"^/(?:video/|[A-Za-z0-9][A-Za-z0-9_-]{2,39}/videos?/)([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/?$", re.I)
@@ -94,7 +98,12 @@ DROPBOX_PATH = re.compile(r"^/(?:s|scl/fi)/[^/]+/[^/]+", re.I)
 # (vm./vt.tiktok.com, tiktok.com/t/...) are looked up with the official oEmbed API (https://developers.tiktok.com/doc/embed-videos).
 TIKTOK_HOSTS = {"tiktok.com", "www.tiktok.com", "m.tiktok.com"}
 TIKTOK_SHORT_HOSTS = {"vm.tiktok.com", "vt.tiktok.com"}
-TIKTOK_PATH = re.compile(r"^/(?:@[\w.-]{1,40}/(?:video|photo)/|embed/(?:v2/)?|player/v1/|v/)(\d{15,21})(?:\.html)?/?$")
+# group 1: author, 2: "video" / "photo", 3: the id
+TIKTOK_PATH = re.compile(r"^/(?:@([\w.-]{1,40})/(video|photo)/|embed/(?:v2/)?|player/v1/|v/)(\d{15,21})(?:\.html)?/?$")
+TIKTOK_UNAVAILABLE = ("TikTok bu videonun başka yerlerde oynatılmasına izin vermiyor (gizli, silinmiş ya da paylaşımı kapalı); "
+                      "başka bir video dene")
+TIKTOK_PHOTO = "Bu bir TikTok fotoğraf gönderisi; TikTok'un oynatıcısı yalnızca videoları açar"
+_tiktok_cache: dict = {}  # video id -> (expires at, caption or ApiError)
 TIKTOK_SHORT_PATH = re.compile(r"^/(?:t/)?[A-Za-z0-9]{5,20}/?$")
 TIKTOK_OEMBED = "https://www.tiktok.com/oembed?url="
 TIKTOK_ID = re.compile(r"^\d{15,21}$")
@@ -144,8 +153,19 @@ async def _guard(request: httpx.Request):
     await _assert_public(request.url.host)
 
 
-async def _probe(url: str, referer: str | None = None, origin: str | None = None, ranged: bool = True) -> dict:
+# What a phone's browser sends when the room page plays a file (Chrome on Android): the room's viewers are asked for
+# exactly like this, so a CDN that treats browsers differently from servers answers here as it will answer them.
+BROWSER_UA = "Mozilla/5.0 (Linux; Android 14; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36"
+
+
+async def _probe(url: str, referer: str | None = None, origin: str | None = None, ranged: bool = True,
+                 browser: bool = False) -> dict:
     headers = {"User-Agent": "NexoraWatch/1.0"}
+    if browser:  # <video> (no CORS) or hls.js (CORS) on the room page, a cross-site request
+        headers = {"User-Agent": BROWSER_UA, "Accept": "*/*", "Sec-Fetch-Site": "cross-site",
+                   "Sec-Fetch-Mode": "cors" if origin else "no-cors", "Sec-Fetch-Dest": "empty" if origin else "video"}
+        if not origin:
+            headers["Accept-Encoding"] = "identity;q=1, *;q=0"
     if ranged:
         headers["Range"] = "bytes=0-2047"
     if referer:
@@ -220,6 +240,9 @@ def _classify(url: str, p: dict, provider: str) -> dict | None:
 #   HLS (hls.js reads with XHR): CORS must allow us, for the playlist and for what it points to (renditions, segments)
 # The server asks the same way, from another network, so a file locked to the site, to the finder's connection or to
 # a short session is refused here instead of failing on everyone's screen in the room.
+# Some CDNs refuse a file when another site's page asks for it (the Referer) but open it to a request without one, as
+# when the address is opened directly: X's video.twimg.com does. Such a file is played from a frame that sends no
+# Referer ("referrer_policy": "no-referrer", see HtmlPlayer); a file refused both ways is refused here.
 SOURCE_LOCKED = "Bu site videosunu yalnızca kendi sayfasında oynatıyor; odadaki diğer cihazlar açamaz"
 
 
@@ -242,25 +265,43 @@ def _first_uri(head: bytes, base: str) -> str | None:
     return None
 
 
+async def _room_probe(url: str, origin: str, cors: bool, referrer: bool = True) -> dict | None:
+    """The request a viewer's browser makes from the room page (None: no answer in time, which refuses nothing)."""
+    try:
+        return await _probe(url, f"{origin}/" if referrer else None, origin=origin if cors else None,
+                            ranged=not HLS_EXT.search(url), browser=True)
+    except ApiError as e:
+        if e.code == "network":  # a slow answer right after a good one: not a reason to refuse
+            return None
+        raise ApiError(422, "source_locked", SOURCE_LOCKED)
+
+
 async def _assert_shareable(c: dict, referer: str | None):
     if not referer or c.get("kind") not in ("direct", "hls"):
         return
     origin = config.WEB_URL
-    hls = c["kind"] == "hls"
     url = c["stream_url"]
-    for _ in range(2):  # the file itself; for HLS also the first thing the playlist points to
-        try:
-            p = await _probe(url, f"{origin}/", origin=origin, ranged=not HLS_EXT.search(url))
-        except ApiError as e:
-            if e.code == "network":  # a slow answer right after a good one: not a reason to refuse
+    if c["kind"] == "hls":
+        for _ in range(2):  # the playlist itself and the first thing it points to (rendition or segment)
+            p = await _room_probe(url, origin, cors=True)
+            if p is None:
                 return
-            raise ApiError(422, "source_locked", SOURCE_LOCKED)
-        if not _open_to_us(p, hls, origin):
-            raise ApiError(422, "source_locked", SOURCE_LOCKED)
-        nxt = _first_uri(p["head"], p["final_url"]) if hls and p["head"].lstrip().startswith(b"#EXTM3U") else None
-        if not nxt:
+            if not _open_to_us(p, True, origin):
+                raise ApiError(422, "source_locked", SOURCE_LOCKED)
+            nxt = _first_uri(p["head"], p["final_url"]) if p["head"].lstrip().startswith(b"#EXTM3U") else None
+            if not nxt:
+                return
+            url = nxt
+        return
+    p = await _room_probe(url, origin, cors=False)
+    if p is None or _open_to_us(p, False, origin):
+        return
+    if p["status"] in (401, 403):  # refused to our page: opened without a Referer? (see SOURCE_LOCKED above)
+        q = await _room_probe(url, origin, cors=False, referrer=False)
+        if q is None or _open_to_us(q, False, origin):
+            c["referrer_policy"] = "no-referrer"
             return
-        url = nxt
+    raise ApiError(422, "source_locked", SOURCE_LOCKED)
 
 
 def _vimeo(url: str, parsed) -> dict | None:
@@ -346,6 +387,23 @@ async def _kick_json(path: str):
     return data
 
 
+def _kick_embed(slug: str, url: str, title: str | None = None) -> dict:
+    """A live Kick channel in Kick's official embed (see KICK_APP_ONLY above)."""
+    t = " ".join(title.split())[:120] if isinstance(title, str) and title.strip() else f"Kick · {slug}"
+    return {"url": url, "kind": "kick", "video_id": None, "channel": slug.lower(), "live": True,
+            "embed_url": f"https://player.kick.com/{slug.lower()}", "stream_url": None, "mime_type": None, "provider": "kick",
+            "title": t, "capabilities": LIVE_SYNC_CAPS, "warning": None}
+
+
+def _kick_channel_of(page: str | None) -> str | None:
+    """The channel of a Kick channel page (kick.com/<channel>), or None."""
+    if not page:
+        return None
+    p = urlparse(page)
+    m = KICK_CHANNEL.match(p.path or "") if (p.hostname or "").lower() in KICK_HOSTS else None
+    return m.group(1) if m and m.group(1).lower() not in KICK_RESERVED else None
+
+
 async def _kick(url: str, parsed) -> dict | None:
     """A Kick live channel, recorded video or clip -> the HLS playlist Kick's own player plays, in Nexora's player.
     Live channels play live for everyone (the room follows play / pause); recordings and clips are fully synced."""
@@ -374,7 +432,12 @@ async def _kick(url: str, parsed) -> dict | None:
         m = KICK_CHANNEL.match(path)
         if not m or (host in KICK_HOSTS and m.group(1).lower() in KICK_RESERVED):
             return None
-        data = await _kick_json(f"/api/v2/channels/{m.group(1).lower()}")
+        try:
+            data = await _kick_json(f"/api/v2/channels/{m.group(1).lower()}")
+        except ApiError as e:
+            if e.code == "kick_app_only":  # Kick refuses our server: the channel still plays, in Kick's embed
+                return _kick_embed(m.group(1), url)
+            raise
         if not data:
             raise ApiError(422, "not_found", "Kick kanalı bulunamadı")
         ls = data.get("livestream")
@@ -387,7 +450,13 @@ async def _kick(url: str, parsed) -> dict | None:
     p = urlparse(src)
     if p.scheme != "https" or not p.hostname:
         raise ApiError(422, "not_found", "Kick videosu bulunamadı")
-    res = await _media_file(src, url)
+    try:
+        res = await _media_file(src, url)
+    except ApiError as e:
+        # A live stream the other phones could not open (or the server could not reach): Kick's embed instead
+        if live and e.code in ("source_locked", "forbidden", "http_error", "network"):
+            return _kick_embed(KICK_CHANNEL.match(path).group(1), url, title)
+        raise
     if not isinstance(title, str) or not title.strip():
         title = "Kick"
     return {**res, "url": url, "title": " ".join(title.split())[:120], "provider": "kick", "live": live}
@@ -529,11 +598,23 @@ async def _tiktok_oembed(url: str) -> str | None:
     if not TIKTOK_ID.match(vid):
         m = re.search(r'data-video-id="(\d{15,21})"', str(data.get("html") or ""))
         vid = m.group(1) if m else ""
+    if vid:  # the same answer carries the caption: kept for the room's title (_tiktok)
+        title = data.get("title") if isinstance(data.get("title"), str) else ""
+        name = data.get("author_name") if isinstance(data.get("author_name"), str) else ""
+        caption = " ".join(title.split())[:120] or (f"TikTok · {name.strip()}"[:120] if name.strip() else None)
+        if caption:
+            _tiktok_cache[vid] = (time.monotonic() + 3600, caption)
     return vid or None
 
 
-async def _tiktok_redirect(url: str) -> str | None:
-    """The video id of a TikTok short link from the address it redirects to (one request, the body is never read)."""
+def _tiktok_page(path: str):
+    """(video id, author or "", photo post?) of a TikTok page address, or None."""
+    m = TIKTOK_PATH.match(path or "")
+    return (m.group(3), m.group(1) or "", m.group(2) == "photo") if m else None
+
+
+async def _tiktok_redirect(url: str):
+    """The page a TikTok short link redirects to, as _tiktok_page gives it (one request, the body is never read)."""
     try:
         async with httpx.AsyncClient(follow_redirects=False, timeout=8, event_hooks={"request": [_guard]}) as c:
             async with c.stream("GET", url, headers={"User-Agent": "Mozilla/5.0 (Linux; Android 14) NexoraWatch/1.0"}) as r:
@@ -545,41 +626,94 @@ async def _tiktok_redirect(url: str) -> str | None:
     p = urlparse(urljoin(url, loc))
     if (p.hostname or "").lower() not in TIKTOK_HOSTS:
         return None
-    m = TIKTOK_PATH.match(p.path or "")
-    return m.group(1) if m else None
+    return _tiktok_page(p.path or "")
 
 
-async def _tiktok_short(url: str) -> str | None:
-    return await _tiktok_oembed(url) or await _tiktok_redirect(url)
+async def _tiktok_short(url: str):
+    vid = await _tiktok_oembed(url)
+    return (vid, "", False) if vid else await _tiktok_redirect(url)
+
+
+async def _tiktok_meta_fetch(page: str):
+    """TikTok's oEmbed answer for a video page: (status, JSON or None). Tests replace `tiktok_meta`."""
+    async with httpx.AsyncClient(timeout=6, follow_redirects=False) as c:
+        async with c.stream("GET", TIKTOK_OEMBED + quote(page, safe=""), headers={"User-Agent": "NexoraWatch/1.0", "Accept": "application/json"}) as r:
+            body = b""
+            async for chunk in r.aiter_bytes():
+                body += chunk
+                if len(body) > 256 * 1024:
+                    return r.status_code, None
+            status = r.status_code
+    try:
+        return status, json.loads(body)
+    except ValueError:
+        return status, None
+
+
+async def _tiktok_caption(vid: str, author: str) -> str | None:
+    """The caption of a TikTok video from the official oEmbed API (https://developers.tiktok.com/doc/embed-videos).
+    TikTok answers 400 / 404 for a video it does not let other sites show (private, deleted, embedding turned off):
+    its player would only say "Video currently unavailable" on everyone's screen, so the link is refused here, with
+    the reason. No answer, or any other answer, refuses nothing: the caption is then simply not known."""
+    now = time.monotonic()
+    hit = _tiktok_cache.get(vid)
+    if hit and hit[0] > now:
+        if isinstance(hit[1], ApiError):
+            raise hit[1]
+        return hit[1]
+    try:
+        status, data = await asyncio.wait_for(tiktok_meta(f"https://www.tiktok.com/@{author}/video/{vid}"), 7)
+    except Exception:
+        return None
+    if status in (400, 404) and isinstance(data, dict):
+        res = ApiError(422, "tiktok_unavailable", TIKTOK_UNAVAILABLE)
+    elif status == 200 and isinstance(data, dict):
+        title = data.get("title") if isinstance(data.get("title"), str) else ""
+        name = data.get("author_name") if isinstance(data.get("author_name"), str) else ""
+        res = " ".join(title.split())[:120] or (f"TikTok · {name.strip()}"[:120] if name.strip() else None)
+    else:
+        return None
+    _tiktok_cache.pop(vid, None)
+    _tiktok_cache[vid] = (now + (3600 if not isinstance(res, ApiError) else 300), res)
+    while len(_tiktok_cache) > 1000:
+        _tiktok_cache.pop(next(iter(_tiktok_cache)))
+    if isinstance(res, ApiError):
+        raise res
+    return res
 
 
 async def _tiktok(url: str, parsed) -> dict | None:
     """A TikTok video (or a short share link to one) -> the official Embed Player (synced)."""
     host = (parsed.hostname or "").lower()
     path = parsed.path or ""
-    vid = None
     if host in TIKTOK_HOSTS:
-        m = TIKTOK_PATH.match(path)
-        if m:
-            vid = m.group(1)
-        elif path.startswith("/t/") and TIKTOK_SHORT_PATH.match(path):
-            vid = await _tiktok_short(url)
-            if not vid:
+        found = _tiktok_page(path)
+        if not found and path.startswith("/t/") and TIKTOK_SHORT_PATH.match(path):
+            found = await _tiktok_short(url)
+            if not found:
                 raise ApiError(422, "tiktok_short", "TikTok kısa bağlantısı açılamadı; videoyu TikTok'ta açıp tam bağlantısını kopyala")
-        elif path.startswith("/@"):
+        elif not found and path.startswith("/@"):
             raise ApiError(422, "social_link", "Bu bağlantıda tek bir video yok; videonun kendi bağlantısını kopyala")
-        else:
+        elif not found:
             return None
     elif host in TIKTOK_SHORT_HOSTS:
         if not TIKTOK_SHORT_PATH.match(path):
             return None
-        vid = await _tiktok_short(url)
-        if not vid:
+        found = await _tiktok_short(url)
+        if not found:
             raise ApiError(422, "tiktok_short", "TikTok kısa bağlantısı açılamadı; videoyu TikTok'ta açıp tam bağlantısını kopyala")
     else:
         return None
+    vid, author, photo = found
+    if photo:
+        raise ApiError(422, "tiktok_photo", TIKTOK_PHOTO)
+    hit = _tiktok_cache.get(vid)
+    if author:
+        caption = await _tiktok_caption(vid, author)
+    else:  # a short link answered by oEmbed itself already said what it is called
+        caption = hit[1] if hit and hit[0] > time.monotonic() and isinstance(hit[1], str) else None
     return {**_embed_base(url, "tiktok"), "video_id": vid, "embed_url": f"https://www.tiktok.com/player/v1/{vid}",
-            "title": "TikTok", "capabilities": EMBED_CAPS}
+            "title": caption or (f"TikTok · @{author}" if author else "TikTok"), "capabilities": EMBED_CAPS}
 
 
 def _instagram(url: str, parsed) -> dict | None:
@@ -911,10 +1045,20 @@ def _page_title(t: str | None) -> str | None:
     return None if t.strip().lower() in GENERIC_TITLES else (t.strip()[:120] or None)
 
 
+class OEmbedRefused(Exception):
+    """The provider answered that the video cannot be shown elsewhere: 401 (private / embedding turned off) or 404."""
+
+    def __init__(self, status: int):
+        super().__init__(status)
+        self.status = status
+
+
 async def _fetch_oembed(url: str):
     """GET an oEmbed document (fixed provider hosts, no redirects, size-capped). Tests replace `oembed_fetch`."""
     async with httpx.AsyncClient(timeout=OEMBED_TIMEOUT, follow_redirects=False) as c:
         async with c.stream("GET", url, headers={"User-Agent": "NexoraWatch/1.0", "Accept": "application/json"}) as r:
+            if r.status_code in (401, 404):
+                raise OEmbedRefused(r.status_code)
             if r.status_code != 200:
                 return None
             body = b""
@@ -926,18 +1070,36 @@ async def _fetch_oembed(url: str):
 
 
 oembed_fetch = _fetch_oembed
+tiktok_meta = _tiktok_meta_fetch
 x_fetch = _x_fetch
 kick_fetch = _kick_fetch
 reddit_fetch = _reddit_fetch
 
 
+YT_REFUSED = {401: ("yt_embed", "YouTube bu videonun başka yerlerde oynatılmasına izin vermiyor (gizli ya da paylaşımı kapalı)"),
+              404: ("yt_notfound", "YouTube videosu bulunamadı ya da kaldırılmış")}
+
+
 async def _oembed_title(key: str, url: str) -> str | None:
+    """The video's title from its provider's oEmbed. YouTube's 401 / 404 (private, embedding turned off, removed) refuse
+    the link with the reason: its player would only say "Video unavailable" on everyone's screen. Anything else (no
+    answer, a slow one) refuses nothing; the title is then simply not known."""
     now = time.monotonic()
     hit = _title_cache.get(key)
     if hit and hit[0] > now:
+        if isinstance(hit[1], ApiError):
+            raise hit[1]
         return hit[1]
     try:
         data = await asyncio.wait_for(oembed_fetch(url), OEMBED_TIMEOUT + 0.5)
+    except OEmbedRefused as e:
+        if not key.startswith("yt:") or e.status not in YT_REFUSED:
+            data = None
+        else:
+            err = ApiError(422, *YT_REFUSED[e.status])
+            _title_cache.pop(key, None)
+            _title_cache[key] = (now + 300, err)
+            raise err
     except Exception:  # network, timeout, bad JSON: the title is a nicety, never a reason to fail
         data = None
     raw = data.get("title") if isinstance(data, dict) else None
@@ -962,6 +1124,8 @@ async def _provider_title(res: dict, page_title: str | None) -> str:
         t = await _oembed_title(f"vimeo:{res['video_id']}:{res.get('video_hash') or ''}",
                                 f"https://vimeo.com/api/oembed.json?url={quote(page, safe='')}")
         return t or _page_title(page_title) or label
+    if kind == "kick" and _page_title(page_title):  # the app's own title of the stream (never a bare "KICK")
+        return " ".join(_page_title(page_title).split())[:120]
     if res.get("title") and res["title"] != label:  # Twitch / Kick: "Twitch · <channel>"
         return res["title"]
     p = _page_title(page_title)
@@ -1043,7 +1207,13 @@ async def _resolve(url_in, referer: str | None) -> dict:
             c["stream_url"] = raw
         elif (parsed.hostname or "").lower() in IA_HOSTS and c["kind"] == "direct":
             c["stream_url"] = url  # archive.org/download/... is the permanent address; the data server behind it is not
-        await _assert_shareable(c, referer)
+        try:
+            await _assert_shareable(c, referer)
+        except ApiError as e:
+            slug = _kick_channel_of(referer) if c["kind"] == "hls" else None
+            if e.code == "source_locked" and slug:  # a live Kick channel found by the app: Kick's embed instead
+                return _kick_embed(slug, f"https://kick.com/{slug}")
+            raise
         return {"url": url, "video_id": None, "embed_url": None, "title": name or parsed.hostname, "warning": None, **c}
     if HLS_EXT.search(url):
         raise ApiError(422, "manifest_invalid", "Adres .m3u8 ile bitiyor ama geçerli bir HLS manifesti döndürmüyor")

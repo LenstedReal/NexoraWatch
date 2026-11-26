@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Clapperboard, TriangleAlert, Volume2, VolumeX, Hand, Pause, Plus, Maximize, Minimize } from "lucide-react";
+import { Clapperboard, TriangleAlert, Volume2, VolumeX, Hand, Pause, Play, Plus, Maximize, Minimize } from "lucide-react";
 import { useI18n, useT } from "@/i18n";
 import { inApp, setOrientation } from "@/lib/native";
 import { HtmlPlayer } from "./HtmlPlayer";
@@ -26,6 +26,7 @@ export const Stage = ({ video, playback, isHost, ident, playerRef, sync, onAddVi
   const [fatal, setFatal] = useState(null);
   const [retryKey, setRetryKey] = useState(0);
   const [media, setMedia] = useState(null); // {el, hls} of our own player while it is mounted
+  const [kickOn, setKickOn] = useState(false); // Kick's embed: is the stream running (the room owner's button shows it)
   const onFatal = useCallback((code) => setFatal(code), []);
   const sourceKey = `${video?.media_id || "none"}:${retryKey}`;
   const prev = useRef(video?.media_id);
@@ -45,7 +46,9 @@ export const Stage = ({ video, playback, isHost, ident, playerRef, sync, onAddVi
     const el = stageRef.current;
     if (document.fullscreenElement) return document.exitFullscreen?.();
     if (el?.requestFullscreen) return el.requestFullscreen().catch(() => {});
-    return el?.querySelector("video")?.webkitEnterFullscreen?.(); // iPhone Safari: only the <video> itself can go fullscreen
+    // iPhone Safari: only the <video> itself can go fullscreen (inside the no-Referer frame when the file plays there)
+    const v = el?.querySelector("video") || el?.querySelector("iframe.html-frame")?.contentDocument?.querySelector("video");
+    return v?.webkitEnterFullscreen?.();
   }, []);
   const rotate = useCallback(() => setOrientation(wide ? "portrait" : "landscape"), [wide]);
 
@@ -67,8 +70,8 @@ export const Stage = ({ video, playback, isHost, ident, playerRef, sync, onAddVi
     body = <VimeoPlayer key={sourceKey} video={video} isHost={isHost} playerRef={playerRef} events={sync.events} onFatal={onFatal} />;
   } else if (video.kind === "twitch") {
     body = <TwitchPlayer key={sourceKey} video={video} playerRef={playerRef} events={sync.events} onFatal={onFatal} />;
-  } else if (video.kind === "kick") { // sources worker: live embed without JS control (no sync)
-    body = <KickPlayer key={sourceKey} video={video} />;
+  } else if (video.kind === "kick") { // Kick's official embed for a live channel: the room runs play / pause (KickPlayer)
+    body = <KickPlayer key={sourceKey} video={video} isHost={isHost} playerRef={playerRef} events={sync.events} onState={setKickOn} />;
   } else if (video.kind === "tiktok") { // src2: official embed player, postMessage API (synced)
     body = <TikTokPlayer key={sourceKey} video={video} isHost={isHost} playerRef={playerRef} events={sync.events} onFatal={onFatal} />;
   } else if (video.kind === "facebook") { // src2: official embedded video player, JS SDK (synced)
@@ -135,6 +138,15 @@ export const Stage = ({ video, playback, isHost, ident, playerRef, sync, onAddVi
             {chip}
             {gestureBtn}
             {soundBtn}
+            {/* Kick's embed has no control of its own for the room: the room owner starts and stops it for everyone here. */}
+            {video.kind === "kick" && isHost && (
+              <div className="stage-tools">
+                <button onClick={() => { const p = playerRef.current; if (p) (p.isPaused() ? p.play() : p.pause()); }}
+                  aria-label={t(kickOn ? "pl_pause" : "pl_play")} title={t(kickOn ? "pl_pause" : "pl_play")} data-testid="kick-toggle-btn">
+                  {kickOn ? <Pause size={16} /> : <Play size={16} />}
+                </button>
+              </div>
+            )}
             {(!embed || app) && (
               <div className="stage-tools">
                 {!embed && !isHost && <button onClick={() => sync.setMuted(!sync.muted)} aria-label={t(sync.muted ? "unmute" : "mute")} data-testid="guest-mute-btn">{sync.muted ? <VolumeX size={16} /> : <Volume2 size={16} />}</button>}
