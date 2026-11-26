@@ -115,7 +115,7 @@ function RoomView({ code, ident, initialRoom, onIdentLost }) {
   const sync = usePlaybackSync({ room, isHost, conn, playerRef, ident });
   useQueueAutoNext({ code, ident, isHost, room, playerRef, onRoom: conn.setRoom }); // feat worker
   const upload = useUpload({ code, ident });
-  const pick = useNativePick({ code, ident, isHost, onRoom: conn.setRoom });
+  const pick = useNativePick({ code, ident, isHost, hasVideo: !!room.video, onRoom: conn.setRoom });
   useBackgroundNotify({ t, room, messages: conn.messages, me: ident.participant_id }); // rooms worker
   const msgCount = conn.messages.length;
   const tabRef = useRef(tab);

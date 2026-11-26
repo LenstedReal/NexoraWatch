@@ -45,6 +45,7 @@
 .lp-card-h{display:flex;flex-direction:column;gap:2px;margin-bottom:14px}
 .lp-card-h b{font:700 20px var(--head)}
 .lp-card-h span{color:var(--mut);font-size:13px}
+.lp-card-h span.ok-c{color:var(--ok)}
 .lp-card .note a{color:var(--cy)}
 .lp-recent{margin:14px 0 0}
 

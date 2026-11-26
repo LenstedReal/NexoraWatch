@@ -222,6 +222,34 @@ def test_upload_and_range(room):
     assert requests.get(f"{API}/media/{mid}/stream", timeout=10).status_code == 403
 
 
+def test_upload_complete_asked_twice_at_once(room):
+    """1.8.5: a phone that lost its connection while the parts were joined asks again; both answers are the finished
+    upload and the file is joined once (the second call waits for the first)."""
+    import threading
+    size = os.path.getsize(SAMPLE)
+    h = cred(room["host"])
+    d = requests.post(f"{API}/uploads/init", json={"code": room["code"], **h, "filename": "TEST2.webm", "size": size,
+                                                  "mime": "video/webm", "fingerprint": f"TEST:{uuid.uuid4()}"}).json()
+    mid, ps, pc = d["media_id"], d["part_size"], d["part_count"]
+    urls = requests.post(f"{API}/uploads/{mid}/part-urls", json={**h, "parts": list(range(1, pc + 1))}).json()["urls"]
+    with open(SAMPLE, "rb") as f:
+        for n in range(1, pc + 1):
+            f.seek((n - 1) * ps)
+            u = urls[str(n)]
+            assert requests.put(u if u.startswith("http") else BASE_URL + u, data=f.read(ps), timeout=120).status_code < 300
+    answers = []
+    ts = [threading.Thread(target=lambda: answers.append(requests.post(f"{API}/uploads/{mid}/complete", json=h, timeout=120)))
+          for _ in range(2)]
+    [t.start() for t in ts]
+    [t.join() for t in ts]
+    assert [a.status_code for a in answers] == [200, 200], [a.text for a in answers]
+    assert all(a.json()["status"] == "completed" for a in answers)
+    g = requests.get(f"{API}/media/{mid}/url", params=cred(room["guest"])).json()
+    s = requests.get(BASE_URL + g["url"], headers={"Range": f"bytes=0-{size - 1}"}, timeout=60)
+    with open(SAMPLE, "rb") as f:
+        assert s.status_code == 206 and s.content == f.read()
+
+
 def test_metrics_summary_requires_auth(room):
     assert requests.get(f"{API}/rooms/{room['code']}/metrics/summary").status_code == 401
     r = requests.get(f"{API}/rooms/{room['code']}/metrics/summary", params=cred(room["host"]))
@@ -454,6 +482,8 @@ def test_queue_add_vote_sort_and_host_rules():
     assert b.status_code == 200, b.text
     q = b.json()["queue"]
     assert [i["url"] for i in q] == ["https://www.youtube.com/watch?v=dQw4w9WgXcQ", "https://youtu.be/jNQXAC9IVRw"]
+    assert a.json()["item_id"] == q[0]["id"] and b.json()["item_id"] == q[1]["id"]  # 1.8.5: "play now" for a pick
+    assert all("referer" not in i for i in q)
     dup = requests.post(f"{API}/rooms/{code}/queue", json={**cred(g), "url": "https://youtu.be/jNQXAC9IVRw"})
     assert dup.status_code == 409 and dup.json()["code"] == "queue_duplicate"
     second = q[1]["id"]

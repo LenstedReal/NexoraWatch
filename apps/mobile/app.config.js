@@ -28,6 +28,7 @@ module.exports = ({ config }) => {
     android: { ...config.android, versionCode, permissions, blockedPermissions, ...(googleServicesFile ? { googleServicesFile } : {}) },
     ios: { ...config.ios, buildNumber: String(versionCode) },
     extra: { ...(config.extra || {}), inmobi },
-    plugins: [...(config.plugins || []), pushPlugin, "./plugins/withReleaseSigning"],
+    // withShareIntent: Share -> Nexora Watch (the SEND intent filter is in app.json, MainActivity.kt is patched here)
+    plugins: [...(config.plugins || []), pushPlugin, "./plugins/withReleaseSigning", "./plugins/withShareIntent"],
   };
 };

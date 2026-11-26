@@ -43,6 +43,12 @@
 .bs-link .set:disabled,.bs-found .set:disabled{opacity:.55}
 .bs-hint{color:var(--warn);font-size:13px;line-height:1.45}
 .bs-err{color:#ff8aa3;font-size:13px;line-height:1.45}
+/* the last video brought: plays or waits in the queue (1.8.5) */
+.bs-done{display:flex;align-items:center;gap:8px;min-height:40px;color:var(--ok);font-size:14px;font-weight:700;line-height:1.35}
+.bs-done svg{flex-shrink:0}
+.bs-done span{flex:1;min-width:0}
+.bs-done .set{flex-shrink:0;min-height:36px;white-space:nowrap}
+.bs-done .set:disabled{opacity:.55}
 .bs-reopen{align-self:flex-start;display:inline-flex;align-items:center;gap:6px;min-height:40px;color:var(--cy);font-size:13px;font-weight:700}
 .bs-reopen:hover{text-decoration:underline}
 

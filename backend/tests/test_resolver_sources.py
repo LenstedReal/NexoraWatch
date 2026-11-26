@@ -5,12 +5,14 @@ import os
 import sys
 
 import pytest
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 
 import resolver  # noqa: E402
 from security import ApiError  # noqa: E402
+
+REAL_FB_FOLLOW = resolver._fb_follow
 
 SYNC = {"seek": True, "rate_correction": False, "sync": True}
 NOSYNC = {"seek": False, "rate_correction": False, "sync": False}
@@ -41,6 +43,20 @@ def tiktok_meta(monkeypatch):
     monkeypatch.setattr(resolver, "tiktok_meta", fake)
     yield state
     resolver._tiktok_cache.clear()
+
+
+@pytest.fixture(autouse=True)
+def fb_follow(monkeypatch):
+    """Where Facebook's share links lead (1.8.5), faked: answers[link] = video address; no answer = Facebook said nothing."""
+    resolver._fb_cache.clear()
+    state = {"answers": {}, "asked": []}
+
+    async def fake(url):
+        state["asked"].append(url)
+        return state["answers"].get(url)
+    monkeypatch.setattr(resolver, "_fb_follow", fake)
+    yield state
+    resolver._fb_cache.clear()
 
 
 @pytest.fixture
@@ -408,10 +424,99 @@ def test_facebook(url, href):
     assert v["embed_url"].startswith("https://www.facebook.com/plugins/video.php?href=")
 
 
-def test_facebook_short_links_and_pages():
+def test_facebook_short_links_and_pages(fb_follow):
+    # Facebook does not say where these lead (a login wall): the person is asked for the video's own link.
     for url in ["https://fb.watch/abcDEF123/", "https://www.facebook.com/share/v/1AbCdEfGh/", "https://www.facebook.com/share/r/1AbCdEfGh/"]:
         assert code_of(url) == "fb_short", url
+    assert code_of("https://www.facebook.com/share/p/1AbCdEfGh/") == "social_link"  # a post, not known to be a video
     assert code_of("https://www.facebook.com/NASA") == "social_link"
+    assert len(fb_follow["asked"]) == 4
+
+
+@pytest.mark.parametrize("link,real,href", [
+    ("https://www.facebook.com/share/r/1AbCdEfGh/", "https://www.facebook.com/reel/1234567890123456/?mibextid=x",
+     "https://www.facebook.com/reel/1234567890123456"),
+    ("https://www.facebook.com/share/v/1AbCdEfGh/", "https://www.facebook.com/NASA/videos/1234567890123456/",
+     "https://www.facebook.com/NASA/videos/1234567890123456/"),
+    ("https://fb.watch/abcDEF123/", "https://m.facebook.com/watch/?v=1234567890123456&ref=sharing",
+     "https://www.facebook.com/watch/?v=1234567890123456"),
+    ("https://www.facebook.com/share/p/1AbCdEfGh/", "https://www.facebook.com/reel/1234567890123456",
+     "https://www.facebook.com/reel/1234567890123456"),
+])
+def test_facebook_share_links_play_through_their_video(fb_follow, link, real, href):
+    """What Facebook's app copies (1.8.5): the video it leads to plays in the official player, in sync."""
+    fb_follow["answers"][link] = real
+    v = resolve(link)
+    assert (v["kind"], v["video_id"], v["href"], v["capabilities"]) == ("facebook", "1234567890123456", href, SYNC)
+    assert v["url"] == real and v["embed_url"].startswith("https://www.facebook.com/plugins/video.php?href=")
+    resolve(link)  # asked once: a share link always leads to the same video
+    assert fb_follow["asked"] == [link]
+
+
+def test_facebook_share_link_to_a_profile_is_not_a_video(fb_follow):
+    fb_follow["answers"]["https://www.facebook.com/share/v/1AbCdEfGh/"] = None
+    assert code_of("https://www.facebook.com/share/v/1AbCdEfGh/") == "fb_short"
+
+
+def test_fb_follow_reads_redirects_and_the_page(monkeypatch):
+    """The real follower, with Facebook's answers faked: redirects (Facebook's hosts only, 5 at most), a login page's
+    next=, og:url / canonical of the page; a login wall, a foreign host or an error gives None."""
+    class Resp:
+        def __init__(self, a):
+            self.status_code, self.headers, self.body = a
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def aiter_bytes(self):
+            yield self.body.encode()
+
+    class Client:
+        def __init__(self, *a, **k):
+            assert k.get("follow_redirects") is False
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        def stream(self, method, url, headers=None):
+            assert method == "GET" and headers["User-Agent"].startswith("Mozilla/5.0")
+            asked.append(url)
+            return Resp(WEB[url])
+    R = lambda loc: (302, {"location": loc}, "")  # noqa: E731
+    P = lambda body: (200, {}, body)  # noqa: E731
+    reel = "https://www.facebook.com/reel/1234567890123456/"
+    WEB = {
+        "https://www.facebook.com/share/r/A1/": R(reel),
+        "https://fb.watch/A2/": R("https://www.facebook.com/share/v/A2b/"),
+        "https://www.facebook.com/share/v/A2b/": R("/NASA/videos/1234567890123456/"),
+        "https://www.facebook.com/share/v/A3/": R("https://www.facebook.com/login/?next=" + quote(reel, safe="")),
+        "https://www.facebook.com/share/v/A4/": P('<html><head><meta content="https://www.facebook.com/watch/?v=1234567890123456"'
+                                                   ' property="og:url"/></head></html>'),
+        "https://www.facebook.com/share/v/A5/": P("<link rel='canonical' href='https://www.facebook.com/reel/1234567890123456'>"),
+        "https://www.facebook.com/share/v/A6/": P('<meta property="og:url" content="https://www.facebook.com/login/">'),
+        "https://www.facebook.com/share/v/A7/": R("https://evil.example/reel/1234567890123456"),
+        "https://www.facebook.com/share/v/A8/": (404, {}, ""),
+        "https://www.facebook.com/share/v/A9/": R("https://www.facebook.com/share/v/A9/"),  # a loop: given up after 5
+    }
+    asked = []
+    monkeypatch.setattr(resolver.httpx, "AsyncClient", Client)
+    run = lambda u: asyncio.run(REAL_FB_FOLLOW(u))  # noqa: E731
+    assert run("https://www.facebook.com/share/r/A1/") == reel
+    assert run("https://fb.watch/A2/") == "https://www.facebook.com/NASA/videos/1234567890123456/"
+    assert run("https://www.facebook.com/share/v/A3/") == reel
+    assert run("https://www.facebook.com/share/v/A4/") == "https://www.facebook.com/watch/?v=1234567890123456"
+    assert run("https://www.facebook.com/share/v/A5/") == "https://www.facebook.com/reel/1234567890123456"
+    assert run("https://www.facebook.com/share/v/A6/") is None
+    assert run("https://www.facebook.com/share/v/A7/") is None
+    assert run("https://www.facebook.com/share/v/A8/") is None
+    asked.clear()
+    assert run("https://www.facebook.com/share/v/A9/") is None and len(asked) == 5
 
 
 def test_vimeo_still_resolves_when_pasted():
@@ -429,7 +534,7 @@ def test_lists_offer_the_new_sites():
     # still accepted as pages (links pasted, or a page picked in the app's browser)
     for h in ("www.twitter.com", "vm.tiktok.com", "old.reddit.com", "player.kick.com", "vimeo.com", "archive.org"):
         assert policy.is_allowed_site(h), h
-    for h in ("instagram.com", "dailymotion.com", "rumble.com", "netflix.com"):  # no sync / waits / not offered / DRM
+    for h in ("instagram.com", "dailymotion.com", "rumble.com", "netflix.com"):  # no sync / paid player only / not offered / DRM
         assert not policy.is_allowed_site(h), h
     assert config.SERVICES_ENABLED is False or os.environ.get("SERVICES_ENABLED")  # 1.8.3: no DRM platforms
 

@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
+  Animated,
   FlatList,
+  Keyboard,
   KeyboardAvoidingView,
-  Modal,
   Platform,
   Pressable,
   ScrollView,
@@ -17,9 +18,10 @@ import { WebView } from "react-native-webview";
 import { Ionicons } from "@expo/vector-icons";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { C, R } from "../theme";
-import { Badge, IconButton } from "../components/ui";
+import { Badge, IconButton, type IconName } from "../components/ui";
 import { FALLBACK_CONFIG, loadConfig, type SiteInfo } from "../core/api";
 import { useT } from "../i18n";
+import type { PickOutcome } from "../core/pick";
 
 export type DetectedMedia = {
   url: string;
@@ -246,7 +248,7 @@ function nav(){
 }
 try{['pushState','replaceState'].forEach(function(k){var o=history[k];if(!o)return;history[k]=function(){var r=o.apply(this,arguments);setTimeout(nav,0);return r;};});
 window.addEventListener('popstate',function(){setTimeout(nav,0)});}catch(e){}
-function tick(){scan();scanTikTok();scanX();scanReddit();nav();}
+function tick(){if(window.__nxHidden)return;scan();scanTikTok();scanX();scanReddit();nav();}
 document.addEventListener('play',function(e){if(e.target&&e.target.tagName==='VIDEO'){scan();scanTikTok();scanX();scanReddit();}},true);
 document.addEventListener('DOMContentLoaded',tick);
 setInterval(tick,1500);
@@ -417,14 +419,44 @@ export function mergeFound(prev: DetectedMedia[], item: DetectedMedia, max = MAX
   return [...prev, { ...item, at: item.at ?? Date.now() }].slice(-max);
 }
 
+// While the browser is closed its page stays open (paused and muted), so it opens again where the person left it;
+// after this long it is let go (the address and the found list stay, the page loads again).
+export const KEEP_ALIVE_MS = 10 * 60 * 1000;
+// Pauses and mutes the page's media while the browser is hidden, and stops anything from starting meanwhile.
+export const HIDE_JS = String.raw`(function(){window.__nxHidden=true;
+if(!window.__nxHideHook){window.__nxHideHook=true;document.addEventListener('play',function(e){if(window.__nxHidden&&e.target&&e.target.pause){try{e.target.pause()}catch(x){}}},true);}
+var l=document.querySelectorAll('video,audio');for(var i=0;i<l.length;i++){var m=l[i];if(m.__nxMuted===undefined)m.__nxMuted=m.muted;m.muted=true;try{m.pause()}catch(x){}}})();true;`;
+// Shown again: sound as it was, nothing starts by itself.
+export const SHOW_JS = String.raw`(function(){window.__nxHidden=false;
+var l=document.querySelectorAll('video,audio');for(var i=0;i<l.length;i++){var m=l[i];if(m.__nxMuted!==undefined){m.muted=m.__nxMuted;m.__nxMuted=undefined;}}})();true;`;
+
+/** What a found video's row shows after it was picked. */
+type RowState = { state: "busy" | "added" | "queued" | "sent" | "error"; id?: string; canPlayNow?: boolean; error?: string | null };
+type Tone = "info" | "ok" | "error";
+const TONE: Record<Tone, { icon: IconName; color: string }> = {
+  info: { icon: "shield-checkmark", color: C.warning },
+  ok: { icon: "checkmark-circle", color: C.success },
+  error: { icon: "alert-circle", color: C.error },
+};
+
 export function BrowserModal({
   visible,
   onClose,
   onPick,
+  onPlayNow,
+  userAgent,
+  backRef,
 }: {
   visible: boolean;
   onClose: () => void;
-  onPick: (m: DetectedMedia) => Promise<void>;
+  /** Sends the video to the room; resolves with what the room did. The browser stays open meanwhile. */
+  onPick: (m: DetectedMedia) => Promise<PickOutcome>;
+  /** A queued pick, wanted at once (the room's host). */
+  onPlayNow: (id: string) => Promise<PickOutcome>;
+  /** Chrome's agent instead of the WebView's (App.tsx: cleanUserAgent), so sites show their normal pages. */
+  userAgent?: string | null;
+  /** Android's back button (App.tsx): back in the site first, the browser closes from its first page. */
+  backRef?: { current: (() => void) | null };
 }) {
   const t = useT();
   const insets = useSafeAreaInsets();
@@ -436,8 +468,10 @@ export function BrowserModal({
   const [nav, setNav] = useState({ back: false, fwd: false, loading: false });
   const [found, setFound] = useState<DetectedMedia[]>([]);
   const [listOpen, setListOpen] = useState(false);
-  const [busy, setBusy] = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
+  const [rows, setRows] = useState<Record<string, RowState>>({}); // by the row's address
+  const [notice, setNotice] = useState<{ text: string; tone: Tone } | null>(null);
+  const say = (text: string, tone: Tone = "info") => setNotice({ text, tone });
+  const [alive, setAlive] = useState(true); // the page is kept while the browser is closed (KEEP_ALIVE_MS)
   const [current, setCurrent] = useState<string | null>(null); // key of the video on screen
   const [webKey, setWebKey] = useState(0); // a new WebView after Android killed the page (see recover)
   const pageHost = useRef("");
@@ -455,6 +489,38 @@ export function BrowserModal({
     const timer = setTimeout(() => setNotice(null), 3500);
     return () => clearTimeout(timer);
   }, [notice]);
+
+  // Slides in and out like the old full-screen modal, but stays mounted: the site's page is still there next time.
+  const slide = useRef(new Animated.Value(visible ? 0 : height + 40)).current;
+  const first = useRef(true);
+  useEffect(() => {
+    if (first.current) {
+      first.current = false;
+      return;
+    }
+    Animated.timing(slide, { toValue: visible ? 0 : height + 40, duration: 260, useNativeDriver: true }).start();
+  }, [visible]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (!visible) slide.setValue(height + 40); // turned while closed
+  }, [height]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Closed: the page is paused and muted, and let go after KEEP_ALIVE_MS. Opened: sound back, or the page again.
+  useEffect(() => {
+    if (visible) {
+      if (!alive) {
+        if (lastPage.current) setUrl(lastPage.current);
+        setAlive(true);
+      } else web.current?.injectJavaScript(SHOW_JS);
+      return;
+    }
+    Keyboard.dismiss();
+    web.current?.injectJavaScript(HIDE_JS);
+    const timer = setTimeout(() => {
+      setAlive(false);
+      setNav({ back: false, fwd: false, loading: false });
+    }, KEEP_ALIVE_MS);
+    return () => clearTimeout(timer);
+  }, [visible]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // A row is listed once it has something to play (a Reddit post's title can arrive before its playlist).
   const sorted = useMemo(
@@ -474,20 +540,21 @@ export function BrowserModal({
   // Android kills a page's renderer when memory runs out (heavy feeds); that WebView cannot be used again. A new one
   // opens the page that was on screen, and what was found so far stays in the list.
   const recover = () => {
-    setNotice(t("b_reloaded"));
+    say(t("b_reloaded"));
     if (lastPage.current) setUrl(lastPage.current);
     setWebKey((k) => k + 1);
   };
   // Android's back button: back in the site first, the browser closes from its first page.
   const back = () => {
-    if (url && nav.back) web.current?.goBack();
+    if (url && alive && nav.back) web.current?.goBack();
     else onClose();
   };
+  if (backRef) backRef.current = back;
 
   const open = (target: string) => {
     const host = hostOf(target);
     if (!isAllowedHost(host, sites)) {
-      setNotice(t("b_unsupported"));
+      say(t("b_unsupported"));
       return;
     }
     setFound([]);
@@ -509,14 +576,41 @@ export function BrowserModal({
     open(`https://m.youtube.com/results?search_query=${encodeURIComponent(t)}`);
   };
 
-  const pick = async (m: DetectedMedia) => {
-    setBusy(m.url);
-    try {
-      await onPick(m);
-    } finally {
-      setBusy(null);
-    }
+  const setRow = (key: string, row: RowState) => setRows((r) => ({ ...r, [key]: row }));
+  const tell = (o: PickOutcome) => {
+    if (o.state === "added") say(t("b_added"), "ok");
+    else if (o.state === "queued") say(t("b_queued"), "ok");
+    else if (o.state === "sent") say(t("b_sent"), "ok");
+    else say(o.error ?? t("b_no_answer"), "error");
   };
+  // The browser stays open: the next video can be picked while this one is still on its way to the room.
+  const pick = async (m: DetectedMedia) => {
+    const key = m.url;
+    if (rows[key]?.state === "busy") return;
+    setRow(key, { state: "busy" });
+    let o: PickOutcome;
+    try {
+      o = await onPick(m);
+    } catch {
+      o = { id: "", state: "error", canPlayNow: false, title: null, error: null };
+    }
+    setRow(key, { state: o.state, id: o.id, canPlayNow: o.canPlayNow, error: o.error });
+    tell(o);
+  };
+  const playNow = async (key: string, id: string) => {
+    setRow(key, { state: "busy", id });
+    let o: PickOutcome;
+    try {
+      o = await onPlayNow(id);
+    } catch {
+      o = { id, state: "error", canPlayNow: false, title: null, error: null };
+    }
+    // When it could not be played now it is still in the queue.
+    setRow(key, o.state === "error" ? { state: "queued", id, canPlayNow: true, error: o.error ?? t("b_no_answer") } : { state: o.state, id, canPlayNow: o.canPlayNow });
+    tell(o);
+  };
+  const rowText = (r: RowState) =>
+    r.error ? r.error : r.state === "added" ? t("b_added") : r.state === "queued" ? t("b_queued") : r.state === "sent" ? t("b_sent") : t("b_no_answer");
 
   const remove = (u: string) => setFound((prev) => prev.filter((x) => x.url !== u));
 
@@ -528,7 +622,12 @@ export function BrowserModal({
     : sites;
 
   return (
-    <Modal visible={visible} animationType="slide" onRequestClose={back} presentationStyle="fullScreen" statusBarTranslucent>
+    <Animated.View
+      pointerEvents={visible ? "auto" : "none"}
+      importantForAccessibility={visible ? "auto" : "no-hide-descendants"}
+      accessibilityElementsHidden={!visible}
+      style={[StyleSheet.absoluteFill, { transform: [{ translateY: slide }] }]}
+    >
       <KeyboardAvoidingView style={{ flex: 1, backgroundColor: C.bg }} behavior={Platform.OS === "ios" ? "padding" : undefined}>
         <View style={[styles.bar, { paddingTop: insets.top + 8 }]}>
           <IconButton icon="close" onPress={onClose} label={t("close")} />
@@ -565,9 +664,9 @@ export function BrowserModal({
         </View>
 
         {notice && (
-          <View style={styles.notice}>
-            <Ionicons name="shield-checkmark" size={16} color={C.warning} />
-            <Text style={styles.noticeText}>{notice}</Text>
+          <View style={[styles.notice, { backgroundColor: TONE[notice.tone].color + "18", borderBottomColor: TONE[notice.tone].color + "44" }]}>
+            <Ionicons name={TONE[notice.tone].icon} size={16} color={TONE[notice.tone].color} />
+            <Text style={styles.noticeText}>{notice.text}</Text>
           </View>
         )}
 
@@ -605,11 +704,14 @@ export function BrowserModal({
                 <Text style={styles.legalText}>{t("b_legal")}</Text>
               </View>
             </ScrollView>
+          ) : !alive ? (
+            <View style={{ flex: 1, backgroundColor: "#000" }} />
           ) : (
             <WebView
               key={webKey}
               ref={web}
               source={{ uri: url }}
+              userAgent={userAgent ?? undefined}
               injectedJavaScriptBeforeContentLoaded={DETECTOR}
               injectedJavaScript={DETECTOR}
               injectedJavaScriptForMainFrameOnly={false}
@@ -619,13 +721,13 @@ export function BrowserModal({
                 const top = (r as any).isTopFrame !== false;
                 if (isAppLink(r.url)) {
                   // "Open the app" buttons (intent://, the store, app links): refused, the page stays as it was.
-                  if (top && /^https?:/i.test(r.url)) setNotice(t("b_app_link"));
+                  if (top && /^https?:/i.test(r.url)) say(t("b_app_link"));
                   return !top && /^https?:/i.test(r.url) ? true : false;
                 }
                 if (!top) return true;
                 const host = hostOf(r.url);
                 if (isAllowedHost(host, sites) || HELPER_HOSTS.includes(host)) return true;
-                setNotice(host === "accounts.google.com" ? t("b_no_login") : t("b_blocked_nav"));
+                say(host === "accounts.google.com" ? t("b_no_login") : t("b_blocked_nav"));
                 // Nothing loaded yet (the site redirected straight away): back to the site list, not a black page.
                 // Once a page of the site is on screen it stays there.
                 if (!loaded.current) {
@@ -742,10 +844,14 @@ export function BrowserModal({
             ) : (
               <FlatList
                 data={sorted}
+                extraData={rows}
                 keyExtractor={(m) => m.url}
                 contentContainerStyle={{ gap: 8, paddingBottom: 4 }}
                 keyboardShouldPersistTaps="handled"
-                renderItem={({ item }) => (
+                renderItem={({ item }) => {
+                  const row = rows[item.url];
+                  const done = row && row.state !== "busy" && row.state !== "error";
+                  return (
                   <View style={styles.item}>
                     <View style={{ flex: 1, gap: 3 }}>
                       <View style={{ flexDirection: "row", gap: 6, alignItems: "center" }}>
@@ -765,17 +871,41 @@ export function BrowserModal({
                       <Text style={styles.meta} numberOfLines={1}>
                         {item.kind === "blocked" ? t("b_protected_d") : hostOf(item.page) || hostOf(item.url)}
                       </Text>
+                      {row && row.state !== "busy" && (
+                        <View style={styles.status}>
+                          <Text style={[styles.statusText, { color: row.error || row.state === "error" ? C.error : C.success }]} numberOfLines={2}>
+                            {rowText(row)}
+                          </Text>
+                          {row.canPlayNow && !!row.id && (
+                            <Pressable onPress={() => playNow(item.url, row.id!)} hitSlop={8} accessibilityRole="button">
+                              <Text style={styles.playNow}>{t("b_play_now")}</Text>
+                            </Pressable>
+                          )}
+                        </View>
+                      )}
                     </View>
                     {item.kind !== "blocked" && (
-                      <Pressable onPress={() => pick(item)} disabled={!!busy} style={[styles.play, !!busy && { opacity: 0.5 }]}>
-                        {busy === item.url ? <ActivityIndicator color="#fff" /> : <Ionicons name="play" size={18} color="#fff" />}
+                      <Pressable
+                        onPress={() => pick(item)}
+                        disabled={row?.state === "busy" || !!done}
+                        style={[styles.play, done && styles.playDone]}
+                        accessibilityRole="button"
+                      >
+                        {row?.state === "busy" ? (
+                          <ActivityIndicator color="#fff" />
+                        ) : done ? (
+                          <Ionicons name="checkmark" size={18} color={C.success} />
+                        ) : (
+                          <Ionicons name="play" size={18} color="#fff" />
+                        )}
                       </Pressable>
                     )}
                     <Pressable onPress={() => remove(item.url)} hitSlop={8} style={styles.del} accessibilityLabel={t("close")}>
                       <Ionicons name="close" size={18} color={C.muted} />
                     </Pressable>
                   </View>
-                )}
+                  );
+                }}
               />
             )}
           </View>
@@ -793,7 +923,7 @@ export function BrowserModal({
           </Pressable>
         </View>
       </KeyboardAvoidingView>
-    </Modal>
+    </Animated.View>
   );
 }
 
@@ -828,5 +958,9 @@ const styles = StyleSheet.create({
   itemTitle: { color: C.text, fontSize: 14, fontWeight: "700" },
   meta: { color: C.muted, fontSize: 11 },
   play: { width: 40, height: 40, borderRadius: 20, backgroundColor: C.purple, alignItems: "center", justifyContent: "center" },
+  playDone: { backgroundColor: C.cardHi, borderWidth: 1, borderColor: C.success + "66" },
+  status: { flexDirection: "row", alignItems: "center", flexWrap: "wrap", columnGap: 10, rowGap: 2, marginTop: 1 },
+  statusText: { fontSize: 11, fontWeight: "700", flexShrink: 1 },
+  playNow: { color: C.cyan, fontSize: 12, fontWeight: "800" },
   del: { width: 30, height: 30, borderRadius: 15, alignItems: "center", justifyContent: "center", backgroundColor: C.input },
 });

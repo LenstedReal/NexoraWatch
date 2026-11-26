@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ActivityIndicator, AppState, BackHandler, Linking, Platform, Pressable, StyleSheet, Text, View, useWindowDimensions } from "react-native";
+import { ActivityIndicator, AppState, BackHandler, Linking, Platform, Pressable, StyleSheet, Text, ToastAndroid, View, useWindowDimensions } from "react-native";
 import { StatusBar } from "expo-status-bar";
 import * as ExpoLinking from "expo-linking";
 import * as ScreenOrientation from "expo-screen-orientation";
@@ -18,7 +18,9 @@ import { ROUTE_REPORTER, adsEnabled, initialAdState, onBackground, onResume, onR
 import { NexoraAds } from "./modules/nexora-ads/src";
 import { ServicePlayer, type ServiceSession } from "./src/screens/ServicePlayer"; // rave: in-app services (beta)
 import { parseServiceCommand, serviceUrlOk, type ServiceCommand, type ServiceReport } from "./src/core/serviceController";
-import { PickBox } from "./src/core/pick";
+import { PickBox, PickWaiters, parsePickResult, roomPath, type PickOutcome } from "./src/core/pick";
+import { cleanUserAgent, facebookVideoUrl, firstUrl, isFacebookShareLink, isShareLink, shareText } from "./src/core/share";
+import { moveToBack } from "./modules/nexora-share/src";
 
 /**
  * Nexora Watch app = the Nexora Watch web app (same screens, same code, always the same version as the website)
@@ -44,7 +46,34 @@ export function insetJs(i: { top: number; right: number; bottom: number; left: n
   return `(function(){var s=document.documentElement.style;s.setProperty("--sa-top","${v(i.top)}");s.setProperty("--sa-right","${v(i.right)}");s.setProperty("--sa-bottom","${v(i.bottom)}");s.setProperty("--sa-left","${v(i.left)}");})(); true;`;
 }
 
-const BOOT = `window.__NEXORA_APP__ = { platform: ${JSON.stringify(Platform.OS)}, version: ${JSON.stringify(VERSION)}, caps: ["open_external", "service_player", "push"] }; ${ROUTE_REPORTER} true;`;
+// 1.8.5: "pick_result" (the site browser stays open and shows what the room did with each video), "share" (Share →
+// Nexora Watch from other apps), "app_state" (the page hears when the app goes to the background). The page also tells
+// the app its browser's user agent once: the site browser presents itself with it (src/core/share.ts cleanUserAgent).
+const CAPS = ["open_external", "service_player", "push", "pick_result", "share", "app_state"];
+const BOOT = `window.__NEXORA_APP__ = { platform: ${JSON.stringify(Platform.OS)}, version: ${JSON.stringify(VERSION)}, caps: ${JSON.stringify(CAPS)} }; try { window.ReactNativeWebView.postMessage(JSON.stringify({ type: "ua", ua: navigator.userAgent })); } catch (e) {} ${ROUTE_REPORTER} true;`;
+// Asking Facebook where a share link leads, before Chrome's own agent is known.
+const FALLBACK_UA = "Mozilla/5.0 (Linux; Android 14; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36";
+
+/** Android's short message at the bottom of the screen: it also shows over another app (Share → Nexora). */
+function toast(text: string) {
+  if (Platform.OS === "android") ToastAndroid.show(text, ToastAndroid.LONG);
+}
+
+/** A Facebook share link (fb.watch, /share/v|r/) asked on the phone: the video's own address, or the link as it was
+ *  (the server tries again; Facebook often answers a phone where it does not answer a server). */
+async function expandFacebook(url: string, ua: string | null): Promise<string> {
+  if (!isFacebookShareLink(url)) return url;
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), 8000);
+  try {
+    const r = await fetch(url, { method: "GET", headers: { "User-Agent": ua || FALLBACK_UA, Accept: "text/html" }, signal: ctl.signal });
+    return facebookVideoUrl(r.url) ?? url;
+  } catch {
+    return url;
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 // InMobi IDs: filled at build time from EXPO_PUBLIC_INMOBI_* (app.config.js `extra.inmobi`). Empty = no ads at all.
 const AD_IDS: Partial<AdIds> = (Constants.expoConfig?.extra as any)?.inmobi ?? {};
@@ -79,9 +108,16 @@ function Shell() {
   const [failed, setFailed] = useState(false);
   const [browser, setBrowser] = useState(false);
   const picked = useRef(false);
-  // A video picked in the site browser waits until the room confirms it (src/core/pick.ts): Android may reload the
-  // room page while the browser is open, and the reloaded room asks for it again.
+  const browserBack = useRef<(() => void) | null>(null); // BrowserModal: back inside the site, then close
+  const [ua, setUa] = useState<string | null>(null); // Chrome's agent for the site browser (from the room page)
+  const uaRef = useRef<string | null>(null);
+  uaRef.current = ua;
+  // A video picked in the site browser (or shared from another app) waits until the room confirms it
+  // (src/core/pick.ts): Android may reload the room page while the browser is open, and the reloaded room asks for it
+  // again. The room's answer for each pick (added, queued, the error) comes back as pick_result.
   const [picks] = useState(() => new PickBox());
+  const [waiters] = useState(() => new PickWaiters((fn, ms) => setTimeout(fn, ms), (tm) => clearTimeout(tm as ReturnType<typeof setTimeout>), (id) => picks.drop(id)));
+  const shareRef = useRef<(link: string) => void>(() => {});
   const [webKey, setWebKey] = useState(0);
   const lastUrl = useRef<string | null>(null);
   const ads = useRef(initialAdState(ADS_ON ? AD_IDS : null, Date.now()));
@@ -145,13 +181,42 @@ function Shell() {
     (async () => {
       await loadLang();
       const initial = await ExpoLinking.getInitialURL().catch(() => null);
+      if (isShareLink(initial)) {
+        // Started by Share → Nexora Watch: no room is open yet. The video waits for the room the person opens
+        // (the home page says so: ?shared=1) and goes there through the room's pick_ready.
+        const raw = firstUrl(shareText(initial));
+        if (raw) {
+          setStart(tapped.current ?? `${WEB_URL}/?shared=1`);
+          // Opening a room takes the person longer than asking Facebook where a share link leads.
+          const url = await expandFacebook(raw, null);
+          picks.picked({ url, page: "", title: "", kind: "page" }, Date.now(), { source: "share", room: "" });
+          return;
+        }
+        toast(t("share_no_link"));
+        setStart(tapped.current ?? WEB_URL);
+        return;
+      }
       setStart(tapped.current ?? webUrlFrom(initial) ?? WEB_URL);
     })();
     const sub = ExpoLinking.addEventListener("url", ({ url }) => {
+      if (isShareLink(url)) {
+        shareRef.current(url);
+        return;
+      }
       const target = webUrlFrom(url);
       if (target) web.current?.injectJavaScript(`location.href = ${JSON.stringify(target)}; true;`);
     });
     return () => sub.remove();
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // The room page hears when the app goes to the background and comes back (lib/away.js on the web): a video the
+  // phone pauses meanwhile is not the host pausing the room.
+  useEffect(() => {
+    const st = AppState.addEventListener("change", (s) => {
+      const state = s === "active" ? "active" : "background";
+      web.current?.injectJavaScript(`window.__nexoraAppState && window.__nexoraAppState(${JSON.stringify(state)}); true;`);
+    });
+    return () => st.remove();
   }, []);
 
   // push worker: a tapped invite notification opens its room.
@@ -171,7 +236,10 @@ function Shell() {
 
   useEffect(() => {
     const sub = BackHandler.addEventListener("hardwareBackPress", () => {
-      if (browser) return false; // the modal handles it
+      if (browser) {
+        browserBack.current?.(); // back inside the site, then the browser closes
+        return true;
+      }
       if (svcOpen.current) { // rave: back closes the service page first
         svcOpen.current();
         return true;
@@ -216,11 +284,21 @@ function Shell() {
       picks.open(typeof m.room === "string" ? m.room : lastUrl.current ?? "");
       setBrowser(true);
     } else if (m.type === "pick_ready") {
-      // The room (again) listens for picks: hand over one that has not arrived yet, if it was made in this room.
-      const res = picks.ready(typeof m.room === "string" ? m.room : lastUrl.current ?? "", Date.now());
-      if (res) reply(res);
+      // The room (again) listens for picks: hand over every one that has not arrived yet, made in this room or
+      // shared for any room.
+      for (const res of picks.ready(typeof m.room === "string" ? m.room : lastUrl.current ?? "", Date.now())) reply(res);
     } else if (m.type === "pick_ack") {
-      picks.ack();
+      const id = picks.ack(typeof m.id === "string" && m.id ? m.id : null);
+      if (id) waiters.ack(id);
+    } else if (m.type === "pick_result") {
+      // What the room did with a pick. Nobody waits for it when a share went to a room opened later: say it here.
+      const o = parsePickResult(m);
+      if (o) {
+        const res = picks.result(o.id);
+        if (!waiters.result(o) && res?.source === "share") toast(shareOutcome(o));
+      }
+    } else if (m.type === "ua") {
+      if (typeof m.ua === "string") setUa((cur) => cur ?? cleanUserAgent(m.ua));
     } else if (m.type === "orientation") {
       if (m.mode === "landscape") ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.LANDSCAPE).catch(() => {});
       else
@@ -253,7 +331,7 @@ function Shell() {
         web.current?.injectJavaScript(`window.__nexoraPush && window.__nexoraPush(${JSON.stringify(r)}); true;`),
       );
     }
-  }, [routeChanged, picks]);
+  }, [routeChanged, picks, waiters]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // rave: the service page's reports go to the room's ServiceCard.
   const toRoom = (r: ServiceReport | { type: "closed" }) =>
@@ -264,10 +342,47 @@ function Shell() {
   };
   svcOpen.current = svc ? closeService : null;
 
-  const onPick = async (m: DetectedMedia) => {
+  // The browser stays open: each pick goes to the room, and the room's answer comes back to the browser's row.
+  const onPick = (m: DetectedMedia): Promise<PickOutcome> => {
     picked.current = true;
-    reply(picks.picked(m, Date.now()));
-    setBrowser(false);
+    const res = picks.picked(m, Date.now());
+    reply(res);
+    return waiters.wait(res.id);
+  };
+  // "Şimdi oynat" on a queued row: the room's host plays it at once.
+  const onPlayNow = (id: string): Promise<PickOutcome> => {
+    const answer = waiters.wait(id, "play_now");
+    web.current?.injectJavaScript(`window.__nexoraPlayNow && window.__nexoraPlayNow(${JSON.stringify(id)}); true;`);
+    return answer;
+  };
+
+  const shareOutcome = (o: PickOutcome) =>
+    o.state === "added" ? t("share_added") : o.state === "queued" ? t("share_queued") : o.state === "sent" ? t("share_sent") : o.error ?? t("share_no_answer");
+
+  // Share → Nexora Watch while the app runs (plugins/withShareIntent.js): the link goes to the room on screen, the
+  // phone says what became of it, and the person is taken back to the app they shared from. No room open: the
+  // home page says so, and the video goes to the room they open next.
+  shareRef.current = async (link: string) => {
+    const raw = firstUrl(shareText(link));
+    if (!raw) {
+      toast(t("share_no_link"));
+      return;
+    }
+    const url = await expandFacebook(raw, uaRef.current);
+    const room = roomPath(lastUrl.current);
+    if (!room) {
+      picks.picked({ url, page: "", title: "", kind: "page" }, Date.now(), { source: "share", room: "" });
+      toast(t("share_pick_room"));
+      const home = `${WEB_URL}/?shared=1`;
+      if (web.current) web.current.injectJavaScript(`location.href = ${JSON.stringify(home)}; true;`);
+      else setStart((cur) => cur ?? home);
+      return;
+    }
+    const res = picks.picked({ url, page: "", title: "", kind: "page" }, Date.now(), { source: "share", room });
+    reply(res);
+    const o = await waiters.wait(res.id);
+    toast(shareOutcome(o));
+    if (o.state !== "error" && !browser) setTimeout(() => moveToBack(), 800);
   };
   const onCloseBrowser = () => {
     if (!picked.current) reply(null);
@@ -352,7 +467,7 @@ function Shell() {
         </View>
       )}
       <ServicePlayer session={svc} commandRef={svcCmd} onReport={toRoom} onClose={closeService} />
-      <BrowserModal visible={browser} onClose={onCloseBrowser} onPick={onPick} />
+      <BrowserModal visible={browser} onClose={onCloseBrowser} onPick={onPick} onPlayNow={onPlayNow} userAgent={ua} backRef={browserBack} />
       {intro && <IntroSplash slogan={t("slogan")} onDone={() => setIntro(false)} />}
     </View>
   );

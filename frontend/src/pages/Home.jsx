@@ -75,9 +75,12 @@ export default function Home() {
   const formRef = useRef(null);
   const app = inApp(); // inside the mobile app there is nothing to download and no "web" to switch to
 
+  // The app sends people here after Share → Nexora when no room was open: the video goes to the room they open next.
+  const shared = params.get("shared") === "1";
+
   useEffect(() => {
     document.title = "Nexora Watch — Better than Rave";
-    if (params.get("join")) formRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+    if (params.get("join") || params.get("shared") === "1") formRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
   }, [params]);
 
   // "Recent rooms" only lists rooms one can still go back to: closed and expired ones are dropped.
@@ -184,7 +187,11 @@ export default function Home() {
           <form className="card lp-card" onSubmit={go} data-testid="room-form">
             <div className="lp-card-h">
               <b>{t("lp_start")}</b>
-              <span>{t(app ? "lp_start_sub_app" : "lp_start_sub")}</span>
+              {shared ? (
+                <span className="ok-c" role="status" data-testid="shared-note">{t("lp_shared")}</span>
+              ) : (
+                <span>{t(app ? "lp_start_sub_app" : "lp_start_sub")}</span>
+              )}
             </div>
             <div className="tabs">
               <button type="button" className={mode === "c" ? "on" : ""} onClick={() => setMode("c")} data-testid="tab-create">{t("tab_create")}</button>

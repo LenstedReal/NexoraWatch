@@ -207,11 +207,16 @@ async def queue_add(code: str, request: Request):
     url = b.get("url").strip() if isinstance(b.get("url"), str) else ""
     if not url or len(url) > 2048:
         raise ApiError(400, "invalid_url", "Geçersiz bağlantı")
-    check_source(url, b.get("referer"))
-    video = await resolve(url, b.get("referer"), b.get("title"))
-    queue = await Q.add(room, p, url, video)
+    referer = b.get("referer")
+    check_source(url, referer)
+    video = await resolve(url, referer, b.get("title"))
+    kept = referer.strip()[:2048] if isinstance(referer, str) and referer.strip() else None
+    # A Facebook share link is kept as the video's own address: playing it later needs no second trip to Facebook.
+    stored = video["url"] if video.get("kind") == "facebook" and video.get("url") else url
+    queue = await Q.add(room, p, stored, video, kept)
     await _queue_broadcast(room.code, queue)
-    return {"queue": queue}
+    # item_id: the room page offers "play now" for the link it just added (a pick from the app's browser, a share).
+    return {"queue": queue, "item_id": next((i["id"] for i in queue if i["url"] == stored), None)}
 
 
 @app.post("/api/rooms/{code}/queue/next")
@@ -225,7 +230,7 @@ async def queue_next(code: str, request: Request):
     if not item:
         return {"played": None, "room": await R.room_view(await R.get_room(room.code))}
     try:
-        video = await resolve(item["url"], None, item.get("title"))
+        video = await resolve(item["url"], item.get("referer"), item.get("title"))
     except ApiError:
         await _queue_broadcast(room.code, Q.queue_view(await Q.load(room.code)))
         raise

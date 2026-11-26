@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "@/lib/api";
+import { isAway, onAwayChange } from "@/lib/away";
 import { createGuestSync, guestStep, noteJump } from "@/lib/syncPolicy";
 
 export { DRIFT_SEEK_S } from "@/lib/syncPolicy";
+const GESTURE_MS = 1500; // a player event this soon after a tap is the person's own action
 const HOST_TOLERANCE_S = 0.75;
 const KEEPALIVE_MS = 20000;
 
@@ -41,6 +43,27 @@ export function usePlaybackSync({ room, isHost, conn, playerRef, ident }) {
   const noticeTimer = useRef(0);
   const [rate, setRateState] = useState(() => rateOf(room?.playback));
   const rateRef = useRef(rate);
+  // The host's page out of sight (lib/away.js): the person switched to TikTok to find the next video, and the phone may
+  // pause the room's video meanwhile. That pause is not the host's, so nothing is published while away; coming back,
+  // the host's player first follows the room (as a guest's would) and only then is the room's source again.
+  const awayRef = useRef(isAway());
+  const backRef = useRef(false);
+  // While the host's player follows the room after coming back, only the person's own tap (play, pause, a jump)
+  // makes the host the room's source again: a pause right after coming back is theirs and reaches everyone.
+  const gestureAt = useRef(0);
+  useEffect(() => {
+    const mark = () => { gestureAt.current = Date.now(); };
+    // A tap inside an embedded player (YouTube, TikTok…) moves the focus into its frame: the page only sees a blur.
+    const frameTap = () => { if (document.activeElement?.tagName === "IFRAME") mark(); };
+    document.addEventListener("pointerdown", mark, true);
+    document.addEventListener("keydown", mark, true);
+    window.addEventListener("blur", frameTap);
+    return () => {
+      document.removeEventListener("pointerdown", mark, true);
+      document.removeEventListener("keydown", mark, true);
+      window.removeEventListener("blur", frameTap);
+    };
+  }, []);
 
   const setMuted = useCallback((m) => {
     mutedRef.current = m;
@@ -78,6 +101,11 @@ export function usePlaybackSync({ room, isHost, conn, playerRef, ident }) {
     const p = playerRef.current;
     const r = roomRef.current;
     if (!isHost || !p?.ready || !r?.video || Date.now() < suppressUntil.current) return;
+    if (isAway()) return; // see awayRef
+    if (backRef.current) {
+      if (Date.now() - gestureAt.current > GESTURE_MS) return; // the player is still catching up with the room
+      backRef.current = false; // the host's own tap: the room follows the host again
+    }
     // Never fall behind the sequence stored for the room (another device, or this clock was corrected backwards).
     const seq = Math.max(seqRef.current + 1, Date.now(), (r.playback?.seq || 0) + 1);
     seqRef.current = seq;
@@ -106,6 +134,33 @@ export function usePlaybackSync({ room, isHost, conn, playerRef, ident }) {
       if (pb.playing) { playTry.current = Date.now(); tryPlay(p); }
     }
   }, [isHost, conn.clockRef, playerRef, tryPlay]);
+
+  // The host is back (see awayRef): its player goes to where the room is now, and plays when the room plays.
+  const followRoom = useCallback(() => {
+    const p = playerRef.current;
+    const r = roomRef.current;
+    if (!p?.ready || !r?.video || r.playback?.media_id !== r.video.media_id) return false;
+    const pb = r.playback;
+    const live = !!p.isLive?.();
+    const target = expectedPosition(pb, conn.clockRef.current.offset);
+    suppressUntil.current = Date.now() + 1500;
+    lastPubRef.current = { at: Date.now(), playing: pb.playing, position: live ? p.getTime() : target, rate: rateOf(pb) };
+    if (!live && Math.abs(p.getTime() - target) > 0.5) p.seek(target);
+    if (pb.playing && p.isPaused()) {
+      Promise.resolve().then(() => p.play()).then(() => setNeedsGesture(false)).catch(() => setNeedsGesture(true));
+    } else if (!pb.playing && !p.isPaused()) {
+      p.pause();
+    }
+    return true;
+  }, [playerRef, conn.clockRef]);
+
+  useEffect(() => onAwayChange((away) => {
+    const was = awayRef.current;
+    awayRef.current = away;
+    if (away || !was || !isHost) return;
+    backRef.current = true;
+    followRoom();
+  }), [isHost, followRoom]);
 
   const onBuffering = useCallback((on) => {
     setStats((s) => (s.buffering === on ? s : { ...s, buffering: on }));
@@ -151,6 +206,20 @@ export function usePlaybackSync({ room, isHost, conn, playerRef, ident }) {
       const offset = conn.clockRef.current.offset;
       const now = Date.now();
       if (isHost) {
+        if (isAway()) return;
+        if (backRef.current) {
+          // Back from away: wait until the player plays where the room is (a refused autoplay waits for a tap).
+          if (now < suppressUntil.current || p.isBuffering()) return;
+          const pbNow = r.playback;
+          if (pbNow.playing && p.isPaused()) return;
+          if (pbNow.playing && !p.isLive?.() && Math.abs(p.getTime() - expectedPosition(pbNow, offset)) > HOST_TOLERANCE_S * 2) {
+            followRoom();
+            return;
+          }
+          backRef.current = false;
+          lastPubRef.current = { at: now, playing: !p.isPaused(), position: p.getTime(), rate: rateRef.current };
+          return;
+        }
         if (now < suppressUntil.current || p.isBuffering()) return;
         const playing = !p.isPaused();
         const ref = lastPubRef.current || { at: now, playing: r.playback.playing, position: expectedPosition(r.playback, offset) };
@@ -201,7 +270,7 @@ export function usePlaybackSync({ room, isHost, conn, playerRef, ident }) {
       setStats((s) => ({ ...s, drift: step.drift, corrections: corrections.current }));
     }, isHost ? 1000 : 500);
     return () => clearInterval(id);
-  }, [mediaId, caps.sync, isHost, conn.clockRef, playerRef, publish, push, tryPlay]);
+  }, [mediaId, caps.sync, isHost, conn.clockRef, playerRef, publish, push, tryPlay, followRoom]);
 
   // "Deniz paused", "Deniz jumped to 1:23": told to everyone except the person who did it. Nothing on the first look
   // at a room or a new video, nothing for old news after a reconnect, never more than one at a time.

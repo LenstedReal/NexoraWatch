@@ -6,6 +6,30 @@
 - `tests/upload_smoke.py <API> tests/sample.mp4` — multipart yükleme, Range 206, bayt eşleşmesi, yetkisiz silme/yükleme 403, kota 413, format 415.
 - Backend smoke (oda/rejoin/host-only/stale seq/WS hello-pong-push/kötü token/oda kalıcılığı) — sonuçlar `test_reports/`.
 
+## 1.8.5 (26 Kasım 2026): bu ortamda çalıştırılanlar
+- Sunucu: `cd backend && pytest -q tests/test_resolver_sources.py tests/test_services.py` (ağ kapalı; Facebook'un yanıtları
+  taklit). Yeni: Facebook paylaşım bağlantıları (fb.watch, /share/v|r|p/) yönlendirmeden, giriş sayfasının `next=`
+  değerinden, sayfanın og:url / canonical adresinden videonun adresine çevrilir; Facebook bir şey söylemezse `fb_short`,
+  başka bir siteye yönlendirirse ya da 5 adımda bitmezse hiçbir şey. `test_nexora_api.py`'ye: sıraya eklenen bağlantının
+  `item_id`'si, aynı yüklemenin iki kez aynı anda tamamlanması (GitHub Actions'ta canlı sunucuyla çalışır).
+- Web (Chrome, Playwright, taklit sunucu): oynat ya da sıraya ekle kuralı (oda boşsa ilki oynar, sonrakiler sıraya,
+  "Şimdi oynat"), uygulamayla protokol v2 (seçim numarası, sıra, yeniden yüklenince ikinci kez eklenmemesi, sonuç
+  mesajları, eski uygulama), webde "Sitelerde gez"in art arda iki bağlantı alması, Reddit'i tarayıcının okuması (Node'da
+  taklit fetch ile: gönderi, paylaşım bağlantısı, crosspost, CORS reddi), ana sayfanın `?shared=1` notu: 51 + 8 kontrol.
+  Oda sahibi başka uygulamadayken: telefonun durdurduğu video odaya yayınlanmaz, dönünce oynatıcı odanın olduğu yere
+  gelir, otomatik oynatma reddedilirse oda sahibinin kendi dokunuşu yine yayınlanır: 10 kontrol. Eski web, oynatıcı
+  düğmeleri, Kick ve eşitleme testleri yeniden geçti.
+- Yükleme (Node, taklit sunucu ve XHR): 60 parçalı dosyada eski kod hata verip ilerleme çubuğunu oynatmaya devam ediyor
+  ve hiç bitmiyor (sorun yeniden üretildi), yeni kod bitiriyor; duran bir parça yeniden gönderiliyor; tamamlama isteği
+  bağlantı yüzünden iki kez kaybolursa üçüncüde bitiyor; sunucu bir parçayı kesin reddederse öbür parçalar da duruyor ve
+  ekran bir daha "yükleniyor"a dönmüyor; iptal "iptal" olarak bitiyor.
+- Uygulama: `npm test` (47 test: seçimlerin bekletilmesi ve sonuçları, paylaşılan metinden bağlantı, Facebook paylaşım
+  bağlantısı, tarayıcı kimliği, MainActivity.kt değişikliği), algılayıcı ve tarayıcı yardımcıları (Chromium'da taklit
+  sayfalar), App.tsx'in esbuild ile paketlenmesi. `tsc --noEmit` burada React Native tipleri olmadığı için ancak React
+  Native taklit edilerek çalıştı (uygulamanın kendi kodu temiz); gerçek tip denetimi GitHub Actions'ta.
+- Burada yapılamayanlar: Kotlin ve `expo prebuild` (Android SDK yok; yalnızca GitHub Actions'taki derleme derler),
+  gerçek telefon, canlı TikTok / Facebook / Reddit. Bkz. `docs/BEKLEYENLER.md` (1.8.5).
+
 ## 1.8.4 (26 Kasım 2026): bu ortamda çalıştırılanlar
 - Sunucu: `cd backend && pytest -q tests/test_resolver_sources.py tests/test_services.py` (ağ kapalı; X, TikTok,
   Kick, Reddit yanıtları taklit). Yeni: X dosyası Referer ile 403 / Referer'sız 200 → `referrer_policy`; ikisi de

@@ -18,7 +18,7 @@ export const OWNER = {
   controllerEn: "LenstedReal (developer of Nexora Watch)",
   address: "", // e.g. "İl/İlçe, Türkiye" — optional, shown only when filled
 };
-const UPDATED = { tr: "13 Kasım 2026", en: "13 November 2026" };
+const UPDATED = { tr: "26 Kasım 2026", en: "26 November 2026" };
 
 const LABELS = {
   tr: {

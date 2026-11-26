@@ -32,19 +32,21 @@ async def _save(code: str, items: list[dict]):
     await db.rooms.update_one({"code": code}, {"$set": {"queue": items}})
 
 
-async def add(room: Room, p: RoomParticipant, url: str, video: dict) -> list[dict]:
+async def add(room: Room, p: RoomParticipant, url: str, video: dict, referer: Optional[str] = None) -> list[dict]:
     async with _locks[room.code]:
-        return await _add(room, p, url, video)
+        return await _add(room, p, url, video, referer)
 
 
-async def _add(room: Room, p: RoomParticipant, url: str, video: dict) -> list[dict]:
+async def _add(room: Room, p: RoomParticipant, url: str, video: dict, referer: Optional[str] = None) -> list[dict]:
     items = await load(room.code)
     if len(items) >= QUEUE_MAX:
         raise ApiError(409, "queue_full", f"Sıra dolu (en çok {QUEUE_MAX})")
     if any(i.get("url") == url for i in items):
         raise ApiError(409, "queue_duplicate", "Bu bağlantı zaten sırada")
     item = {"id": str(uuid.uuid4()), "url": url, "title": (video.get("title") or "")[:200] or None, "kind": video.get("kind"),
-            "added_by": p.participant_id, "added_by_name": p.nickname, "votes": [], "added_at": iso(utcnow())}
+            "added_by": p.participant_id, "added_by_name": p.nickname, "votes": [], "added_at": iso(utcnow()),
+            # The page a found file came from (the app's site browser): playing the item later checks it the same way.
+            "referer": referer or None}
     items.append(item)
     await _save(room.code, items)
     return queue_view(items)

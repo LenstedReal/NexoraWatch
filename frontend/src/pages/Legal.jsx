@@ -38,7 +38,8 @@ function PrivacyTr() {
         </li>
         <li>
           <b>Paylaşılan içerik:</b> Odaya eklenen video bağlantıları; yüklediğin video dosyaları; Google Drive'dan içe aktarılan herkese
-          açık dosyalar; uygulama içi tarayıcıda algılanan videonun adresi ve bulunduğu sayfa adresi.
+          açık dosyalar; uygulama içi tarayıcıda algılanan videonun adresi ve bulunduğu sayfa adresi; başka bir uygulamadan (ör. TikTok)
+          Nexora Watch'a paylaştığın video bağlantısı.
         </li>
         <li>
           <b>Teknik veriler:</b> IP adresi, istek zamanı, cihaz/tarayıcı tarafından gönderilen standart bağlantı bilgileri, senkron ölçümleri
@@ -51,17 +52,12 @@ function PrivacyTr() {
           görür ve istediğin an silebilirsin.
         </li>
         <li>
-          <b>Odaya eklenenler:</b> Sıraya eklenen bağlantılar ve oylar; yüklenen altyazı dosyaları; ev sahibi odayı herkese açarsa oda adı,
+          <b>Odaya eklenenler:</b> Sıraya eklenen bağlantılar ve oylar; yüklenen altyazı dosyaları; oda sahibi odayı herkese açarsa oda adı,
           oynayan videonun başlığı ve kişi sayısı ana sayfadaki "Açık odalar" listesinde herkese görünür.
         </li>
         <li>
           <b>Hata raporları:</b> Uygulama veya site bir hatayla karşılaşırsa hata mesajı, teknik iz, sayfa, uygulama sürümü ve tarayıcı
           bilgisi gönderilir. Kişisel bilgi içermez.
-        </li>
-        <li>
-          <b>Abonelik servisleri (beta):</b> Netflix, Disney+, Prime Video veya HBO Max uygulama içinde kendi hesabınla izlenir. Giriş
-          doğrudan servisin sayfasında yapılır; şifren ve servisin çerezleri yalnızca telefonunda kalır, bize gelmez. Biz yalnızca oynat,
-          duraklat ve konum bilgisini odayla eşitleriz.
         </li>
         <li>
           <b>Şikâyetler:</b> Bir mesajı veya kişiyi bildirdiğinde; şikâyet nedeni, notun, ilgili mesajın kopyası ve rumuzlar.
@@ -105,8 +101,10 @@ function PrivacyTr() {
           teknik verileri kendi gizlilik politikası kapsamında işleyebilir.
         </li>
         <li>
-          <b>Video sağlayıcıları</b> (YouTube, TikTok, Facebook, Twitch, Vimeo): odada bu kaynaklardan bir video oynatıldığında sağlayıcının
-          resmî oynatıcısı yüklenir ve sağlayıcı kendi gizlilik politikası kapsamında veri işleyebilir.
+          <b>Video sağlayıcıları</b> (YouTube, TikTok, Facebook, Twitch, Kick, Vimeo): odada bu kaynaklardan bir video oynatıldığında
+          sağlayıcının resmî oynatıcısı yüklenir ve sağlayıcı kendi gizlilik politikası kapsamında veri işleyebilir. X, Reddit ve Kick
+          videolarında video dosyası her izleyicinin cihazına doğrudan sağlayıcının sunucusundan gelir; sağlayıcı bu sırada IP adresi gibi
+          teknik verileri görebilir.
         </li>
         <li>
           <b>YouTube (Google)</b>: odada bir YouTube videosu oynatıldığında resmi YouTube oynatıcısı yüklenir ve YouTube kendi gizlilik

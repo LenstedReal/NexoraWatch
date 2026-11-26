@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { ArrowLeft, ClipboardPaste, ExternalLink, Info, Loader2, Search, X } from "lucide-react";
+import { ArrowLeft, Check, ClipboardPaste, ExternalLink, Info, Loader2, Search, X } from "lucide-react";
 import { errorText, useT } from "@/i18n";
 import { useAppConfig } from "@/lib/config";
 import "@/browse.css";
@@ -8,7 +8,8 @@ import "@/browse.css";
 // "Browse sites & find a video" on the web. The mobile app opens the supported site inside its own browser and finds
 // the video itself. On the web the site opens next to Nexora (its app or a new tab) and its Share → Copy link is all
 // it takes: coming back, a newly copied link goes to the room by itself once the browser lets Nexora read the
-// clipboard; until then one tap on the paste button does it (1.8.4).
+// clipboard; until then one tap on the paste button does it (1.8.4). The sheet stays open after a video came in
+// (1.8.5): it says whether it plays or waits in the queue, and the next copied link comes in the same way.
 
 const isUrl = (s) => /^https?:\/\/\S+$/i.test(s);
 const isDomain = (s) => /^[\w-]+(\.[\w-]+)+(\/\S*)?$/.test(s);
@@ -59,6 +60,7 @@ export function BrowseSheet({ onClose, onBring }) {
   const [nudge, setNudge] = useState(false); // back from the site without clipboard access: the paste button is pointed out
   const [err, setErr] = useState(null);
   const [busy, setBusy] = useState(false);
+  const [done, setDone] = useState(null); // the last video brought: {queued, playNow, playing}
   const boxRef = useRef(null);
   const linkRef = useRef(null);
   const offered = useRef("");
@@ -144,9 +146,19 @@ export function BrowseSheet({ onClose, onBring }) {
     setHint("");
     setNudge(false);
     setFound(null);
+    setDone(null);
     try {
-      await onBring(url);
-      if (alive.current) closeRef.current();
+      const res = await onBring(url);
+      if (!alive.current) return;
+      if (res?.drive) {
+        closeRef.current(); // a Drive file is imported: its progress is shown in the video panel
+        return;
+      }
+      busyRef.current = false;
+      setBusy(false);
+      setLink("");
+      setStep("link");
+      setDone({ queued: !!res?.queued, playNow: res?.playNow || null, playing: false });
     } catch (ex) {
       busyRef.current = false;
       if (!alive.current) return;
@@ -156,6 +168,23 @@ export function BrowseSheet({ onClose, onBring }) {
       setStep("link");
     }
   }, [onBring]);
+
+  const playNow = async () => {
+    const run = done?.playNow;
+    if (!run || busyRef.current) return;
+    busyRef.current = true;
+    setBusy(true);
+    setErr(null);
+    try {
+      await run();
+      if (alive.current) setDone((d) => (d ? { ...d, playNow: null, playing: true } : d));
+    } catch (ex) {
+      if (alive.current) setErr(ex);
+    } finally {
+      busyRef.current = false;
+      if (alive.current) setBusy(false);
+    }
+  };
   const bringRef = useRef(bring);
   bringRef.current = bring;
 
@@ -166,6 +195,7 @@ export function BrowseSheet({ onClose, onBring }) {
     setErr(null);
     setHint("");
     setNudge(false);
+    setDone(null);
   };
 
   const openSite = (s) => {
@@ -272,6 +302,15 @@ export function BrowseSheet({ onClose, onBring }) {
                   <li>{t("bs_step2")}</li>
                   <li>{t("bs_step3")}</li>
                 </ol>
+              )}
+              {done && (
+                <div className="bs-done" role="status" data-testid="browse-done">
+                  <Check size={16} aria-hidden="true" />
+                  <span>{t(done.playing ? "now_playing" : done.queued ? "q_added" : "add_added")}</span>
+                  {done.playNow && (
+                    <button type="button" className="set" onClick={playNow} disabled={busy} data-testid="browse-play-now">{t("q_play")}</button>
+                  )}
+                </div>
               )}
               {foundCard}
               <button type="button" className={`bs-paste${nudge ? " nudge" : ""}`} onClick={paste} disabled={busy} data-testid="browse-paste">

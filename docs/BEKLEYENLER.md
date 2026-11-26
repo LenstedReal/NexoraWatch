@@ -2,38 +2,30 @@
 
 Bir dış nedenle şimdilik yapılamayan işler. Engel kalkınca buradan devam edilir.
 
-## Dailymotion kaynağı (beklemede)
+## Dailymotion kaynağı (bırakıldı)
 
-**Durum (26 Kasım 2026):** Hesap açıldı (VPN ile), ama bu hesabın Dailymotion Studio'sunda oynatıcı bölümü yok: solda
-yalnızca Yükle, Medya, Analizler, Ödemeler, Ayarlar var; Ayarlar → Hesap'ta da hesap türü seçeneği görünmüyor.
-Dailymotion'ın belgelerine göre Player ID, Studio'daki "Players" sekmesinden ya da Platform API ile (manage_players
-yetkisi) alınıyor; bu hesapta ikisi de yok. Player ID alınamadığı için Dailymotion eklenmedi. Dailymotion'ın yardım sayfası Players bölümünü "Dailymotion Partner" hesaplarına bağlıyor; yayıncı erişimi Dailymotion Pro ile veriliyor. 26 Kasım 2026'da pro.dailymotion.com (artık dailymotionbusiness.com) sayfası, yalnızca oynatıcı isteyenler için olan aboneliğin yeni müşterilere geçici olarak kapatıldığını yazıyor; diğer seçenek (Edge) yayın kuruluşları için. Abonelik yeniden açılırsa ya da Studio'da Embeds → Players görünürse aşağıdaki adımlarla eklenir. (Önceki durum: 13 ve 25
-Kasım'da Türkiye'den hesap açılamamıştı.) VPN ile açılan hesap Dailymotion'ın kurallarına takılıp kapatılırsa oynatıcı da
-herkeste durur; Player ID alınırsa bu risk bilinerek eklenir (kararı uygulamanın sahibi verdi). Uygulamada ve sitede
-Dailymotion hiçbir yerde geçmiyor; kullanıcıya yarım bir özellik gösterilmiyor. (1.8.0'da uygulamanın tarayıcısına dosya
-bulma yoluyla eklenmişti; bu karara aykırı olduğu için 1.8.1'de geri alındı.)
+**Karar (26 Kasım 2026):** Dailymotion eklenmiyor. Uygulamanın sahibi ücretli bir paket almamaya karar verdi.
 
-**Neden Player ID gerekiyor:** Dailymotion'ın resmî oynatıcısı (Player Web SDK) yalnızca bir Player ID ile
-yükleniyor. Oynat, durdur, ileri sar ve konum okuma bu SDK ile yapılıyor; eşitleme bunlarla kurulabiliyor. Resmî
-yol dışında bir oynatıcı kullanılmayacak.
+**Neden:** Dailymotion'ın resmî oynatıcısı (Player Web SDK) bir Player ID ile yükleniyor; oynat, durdur, ileri sar ve
+konum okuma bu SDK ile yapılıyor. 2026'nın üçüncü çeyreğinden beri Player ID içermeyen gömme kodları 403 veriyor
+(Dailymotion'ın Q3 2026 sürüm notu ve geliştirici günlüğü: "Player ID required in embed URLs"); yani ID'siz video
+gösterilemiyor bile. Players bölümü (Studio → Embeds → Players) yalnızca Edge müşterilerine açık; normal kullanıcı,
+standart ve premium creator hesaplarında yok. Yalnızca oynatıcı isteyenlerin aboneliği (Starter / Advanced) yeni
+müşterilere kapalı. Edge yayıncılar, yayın kuruluşları ve medya grupları için ve fiyatı teklif üzerine veriliyor.
+Açılan Dailymotion hesabı (VPN ile) Nexora'da hiçbir yerde kullanılmıyor.
 
-**Engel kalkınca yapılacaklar:**
+**Video algılamayla neden olmuyor:** Dailymotion'ın akış adresleri varsayılan olarak adresi alan cihazın IP'sine / ağına
+kilitli ve süreli (Dailymotion'ın "Generate stream URLs" belgesi). Bir telefonun bulduğu adres sunucunun "başka cihaz
+açabiliyor mu" denetiminden geçmez, odadaki diğer telefonlarda ve webde açılmaz. 1.8.0'da tarayıcının dosya bulma yolu
+denenmişti; resmî oynatıcı kararına aykırı olduğu için 1.8.1'de geri alındı. Uygulamada ve sitede Dailymotion hiçbir
+yerde geçmiyor.
 
-1. dailymotion.com'da hesap aç (masaüstü sitesi), Studio → Players → Create player, adı `Nexora`, ayarlara dokunma.
-2. Listede `x` ile başlayan kısa kodu al (ör. `x8k2m9p`). Gizli değil, düz yazılabilir.
-3. Kod tarafı:
-   - `backend/resolver.py`: `dailymotion.com/video/<id>` ve `dai.ly/<id>` bağlantılarını `kind: "dailymotion"`,
-     `capabilities: {seek: true, rate_correction: false, sync: true}` olarak çöz; canlı yayınları ve oynatma
-     listelerini `no_sync_source` ile reddet.
-   - `frontend/src/components/player/`: `DailymotionPlayer.jsx` (SDK: `https://geo.dailymotion.com/libs/player/<PLAYER_ID>.js`,
-     `play` / `pause` / `seek` / `getState`), `Stage.jsx` içinde sağlayıcı çubuğu ile göster.
-   - Player ID ortam değişkeninden gelsin (`DAILYMOTION_PLAYER_ID`), `/api/config` ile istemciye geçsin; boşsa
-     Dailymotion kapalı kalsın.
-   - `backend/config.py` varsayılan site listesine `dailymotion.com|Dailymotion` eklensin (ID varsa); `apps/mobile`
-     tarayıcısı Dailymotion sayfasını `pageOffer` ile önersin (YouTube gibi), dosya aramasın.
-   - Testler: çözümleyici testi, sahte SDK ile ev sahibi/misafir eşitleme testi (Twitch/Facebook testleri gibi).
-4. Gizlilik politikası: video sağlayıcıları listesine Dailymotion eklenir (TR + EN) ve GitHub'daki
-   `NexoraWatch/` kopyaları yeniden üretilir.
+**Bir gün Player ID alınırsa:** `backend/resolver.py` `dailymotion.com/video/<id>` ve `dai.ly/<id>` bağlantılarını
+`kind: "dailymotion"` (`seek: true, sync: true`) olarak çözer, canlı yayın ve oynatma listelerini `no_sync_source` ile
+reddeder; `frontend/src/components/player/DailymotionPlayer.jsx` SDK'yı (`https://geo.dailymotion.com/libs/player/<PLAYER_ID>.js`,
+`play` / `pause` / `seek` / `getState`) yükler; ID `DAILYMOTION_PLAYER_ID` ortam değişkeninden `/api/config` ile gelir,
+boşsa Dailymotion kapalı kalır; site listesi, uygulama tarayıcısı (`pageOffer`), testler ve gizlilik politikası buna göre
+güncellenir.
 
 ## Reddit: API anahtarı alınamıyor (dış engel, kalıcı)
 
@@ -76,6 +68,29 @@ alınabiliyor ve bu API Cloudflare bot denetiminin arkasında. Sunucudan gelen i
 - Kanal yayında değilse `kick_offline`.
 
 **Yapılacak:** İlk sürümden sonra sitede bir Kick kanalı bağlantısı denenip sunucunun cevap alıp almadığı görülür.
+
+## 1.8.5: gerçek telefonda denenecekler (bu ortamda yapılamadı)
+
+- **Paylaş → Nexora Watch:** TikTok uygulamasında bir videoda Paylaş → (diğer uygulamalar) → Nexora Watch. Bir oda
+  açıkken: video odaya gider (boşsa oynar, doluysa sıraya), altta "Video odaya eklendi / sıraya eklendi" yazar, bir an
+  sonra TikTok'a geri dönülür. Oda kapalıyken: ana sayfa "Paylaştığın video hazır" der, açılan ilk odaya eklenir.
+  YouTube, X, Reddit, Facebook, Kick ve Twitch uygulamalarından da denenmeli. Paylaş menüsünde Nexora Watch'ın
+  görünmesi ve geri dönüş, GitHub'daki derlemenin Kotlin değişikliğine bağlı (burada derlenemedi).
+- **Uygulama tarayıcısı:** TikTok'ta akışı kaydırırken birkaç videoyu art arda seç: tarayıcı kapanmamalı, her satır
+  sonucunu yazmalı, "Şimdi oynat" sıradakini hemen açmalı. Tarayıcıyı kapatıp aç: TikTok baştan yüklenmemeli. TikTok'un
+  "uygulamada aç" ısrarı Chrome kimliğiyle azalmalı; azalmıyorsa ekran kaydı gerekli.
+- **Oda sahibi başka uygulamadayken:** oda sahibi YouTube videosu oynarken TikTok'a geçsin; diğer telefonda video
+  durmamalı. Dönünce oda sahibinin videosu odanın olduğu yere gelmeli. Oda sahibi 2 dakikadan uzun dışarıda kalırsa
+  odanın sahipliği sıradaki kişiye geçebilir (1.8.1'den beri böyle); bu durumda geri dönen kişinin bulduğu videolar sıraya
+  girer.
+- **Facebook paylaşım bağlantısı:** Facebook uygulamasında "Bağlantıyı kopyala" ile alınan bağlantı (facebook.com/share/…)
+  sitede yapıştırılınca açılmalı. Facebook sunucumuza yönlendirmeyi vermezse bağlantı "Facebook bu paylaşım bağlantısını
+  açmadı" der; uygulamada Paylaş → Nexora Watch ise bağlantıyı önce telefonda açar.
+- **Reddit sitede:** Reddit sunucumuzu reddettiğinde site gönderiyi kendi tarayıcısından okumaya çalışır. Reddit'in buna
+  izin verip vermediği (CORS) yalnızca gerçek tarayıcıda görülür; izin vermezse eskisi gibi "uygulamadan ekle" yazar.
+- **Uzun video yükleme:** 500 MB üstü bir videoyu hem sitede hem uygulamada yükle; yükleme sırasında ekran kapanmamalı
+  (sitede), Wi-Fi'ı birkaç saniye kapatıp açınca "bağlantı bekleniyor" yazıp kaldığı yerden sürmeli, sonunda video odada
+  oynamalı.
 
 ## 1.8.4: gerçek telefonda ve canlı sitelerde denenecekler (bu ortamda yapılamadı)
 

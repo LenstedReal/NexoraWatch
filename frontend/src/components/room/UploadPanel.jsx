@@ -31,9 +31,10 @@ export const UploadPanel = ({ upload }) => {
           <div className="bar"><i style={{ width: `${prog.phase === "done" ? 100 : pct}%` }} /></div>
           <div className="up-row small">
             <span data-testid="upload-progress-text">
-              {prog.phase === "finalizing" ? t("finalizing") : prog.phase === "done" ? t("upload_done") : prog.phase === "error" ? errorText(t, err) : `${t("uploading")} ${pct}% · ${fmtBytes(prog.loaded)} / ${fmtBytes(prog.total)}`}
+              {prog.phase === "finalizing" ? t("finalizing") : prog.phase === "done" ? t("upload_done") : prog.phase === "error" ? errorText(t, err)
+                : prog.waiting ? `${t("uploading")} ${pct}% · ${t("upload_waiting")}` : `${t("uploading")} ${pct}% · ${fmtBytes(prog.loaded)} / ${fmtBytes(prog.total)}`}
             </span>
-            {prog.speed > 0 && prog.phase === "uploading" && <span>{fmtBytes(prog.speed)}/s · {Math.ceil(prog.eta || 0)}s</span>}
+            {prog.speed > 0 && prog.phase === "uploading" && !prog.waiting && <span>{fmtBytes(prog.speed)}/s · {Math.ceil(prog.eta || 0)}s</span>}
             {prog.phase === "done" && <CheckCircle2 size={15} className="ok-c" />}
           </div>
           {busy && <button className="btn sm" onClick={cancel} data-testid="upload-cancel-btn"><X size={13} /> {t("cancel")}</button>}

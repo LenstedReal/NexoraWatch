@@ -18,25 +18,89 @@ export function postNative(msg) {
 /** Opens the app's site browser. What the person picks there arrives through onNativePick. */
 export const openNativeBrowser = () => postNative({ type: "open_browser", room: window.location.pathname });
 
+/** App 1.8.5+ shows what became of a pick itself (in its site browser, or as a phone toast for Share → Nexora). */
+export const appShowsPickResult = () => !!appInfo()?.caps?.includes("pick_result");
+
+// Picks handled by this page, by id, for 10 minutes (sessionStorage: it outlives a reload). The app sends every pick
+// it has no answer for again when the room page asks (pick_ready), and a handled one must not be added twice; what
+// became of it is kept, so the app hears it again, and so is the queue item a "Play now" refers to.
+const PICKS_KEY = "nx:picks";
+const PICKS_MS = 10 * 60 * 1000;
+const pickMem = new Map(); // the same in memory, for browsers without storage
+
+function picksSeen() {
+  const now = Date.now();
+  let all = {};
+  try {
+    all = JSON.parse(sessionStorage.getItem(PICKS_KEY) || "{}") || {};
+  } catch {
+    all = {};
+  }
+  pickMem.forEach((v, k) => { if (!all[k]) all[k] = v; });
+  return Object.fromEntries(Object.entries(all).filter(([, v]) => v && typeof v.at === "number" && now - v.at < PICKS_MS));
+}
+
+/** What this page knows about a pick: {at, result?, item?} or null. */
+export const pickMemory = (id) => (id ? picksSeen()[id] || null : null);
+
+export function rememberPick(id, patch) {
+  if (!id) return;
+  const all = picksSeen();
+  const next = { ...(all[id] || {}), ...patch, at: all[id]?.at || Date.now() };
+  all[id] = next;
+  pickMem.set(id, next);
+  try {
+    sessionStorage.setItem(PICKS_KEY, JSON.stringify(all));
+  } catch {
+    /* storage disabled: this page's memory only */
+  }
+}
+
+/** Tells the app what became of the pick `id`: {ok, queued, can_play_now, title} or {ok:false, error}. */
+export function reportPick(id, result) {
+  if (!id) return;
+  rememberPick(id, { result });
+  if (appShowsPickResult()) postNative({ type: "pick_result", id, ...result });
+}
+
 /**
- * Calls `fn({url, referer, title})` for every video picked in the app's site browser. The room listens for as long as
- * it is open, not only while a button waits: a heavy site can make Android reload this page while the browser is on
- * top, and the pick made afterwards must still reach the room. "pick_ready" asks the app for a pick it could not
- * deliver, "pick_ack" tells it that one arrived (app 1.8.1+; older apps ignore both and simply call the function).
- * A pick made for another room (the person moved on meanwhile) is dropped.
+ * Calls `fn({id?, url, referer, title, source?})` for every video picked in the app's site browser or shared to the
+ * app. The room listens for as long as it is open, not only while a button waits: a heavy site can make Android
+ * reload this page while the browser is on top, and a pick made afterwards must still reach the room. "pick_ready"
+ * asks the app for picks it could not deliver, "pick_ack" tells it that one arrived (app 1.8.1+; older apps ignore
+ * both and simply call the function; app 1.8.5+ numbers its picks and the ack names the number). A pick made for
+ * another room (the person moved on meanwhile) is dropped; one with an id seen before is not added again.
  */
 export function onNativePick(fn) {
   if (!inApp()) return () => {};
   const here = () => window.location.pathname.toUpperCase();
   const mine = (res) => {
-    postNative({ type: "pick_ack" });
+    const id = res && typeof res.id === "string" && res.id ? res.id : "";
+    postNative(id ? { type: "pick_ack", id } : { type: "pick_ack" });
     if (!res || !res.url) return;
     if (typeof res.room === "string" && res.room && res.room.toUpperCase() !== here()) return;
+    if (id) {
+      const before = pickMemory(id);
+      if (before) {
+        // Handled before this page reloaded: the app hears the answer again, nothing is added twice.
+        if (before.result) reportPick(id, before.result);
+        return;
+      }
+      rememberPick(id, {});
+    }
     fn(res);
   };
   window.__nexoraPick = mine;
   postNative({ type: "pick_ready", room: window.location.pathname });
   return () => { if (window.__nexoraPick === mine) window.__nexoraPick = undefined; };
+}
+
+/** App 1.8.5+: the host tapped "Şimdi oynat" on a queued pick in the app; `fn(id)` plays it and reports the result. */
+export function onNativePlayNow(fn) {
+  if (!inApp()) return () => {};
+  const mine = (id) => { if (typeof id === "string" && id) fn(id); };
+  window.__nexoraPlayNow = mine;
+  return () => { if (window.__nexoraPlayNow === mine) window.__nexoraPlayNow = undefined; };
 }
 
 /**

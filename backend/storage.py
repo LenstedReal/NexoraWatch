@@ -1,5 +1,6 @@
 import asyncio
 import math
+from collections import defaultdict
 
 import httpx
 import os
@@ -305,9 +306,20 @@ def _upload_video(m: Media) -> dict:
             "capabilities": {"seek": True, "rate_correction": True, "sync": True}, "warning": None}
 
 
+# A phone that lost its connection while the parts were being joined asks again (lib/uploader.js): the second call
+# waits for the first one and then finds the upload completed, instead of joining the same parts a second time.
+# One backend instance (see hub.py), so a lock per upload in this process is enough.
+_complete_locks: dict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
+
+
 @router.post("/uploads/{media_id}/complete")
 async def upload_complete(media_id: str, request: Request):
     b = await _body(request)
+    async with _complete_locks[media_id]:
+        return await _upload_complete(media_id, b)
+
+
+async def _upload_complete(media_id: str, b: dict):
     m, p = await _owner_session(media_id, b)
     room = await R.get_room(m.room_code)
     if m.status == "completed":

@@ -1,7 +1,8 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { Link2, Upload, Loader2, Film, PlayCircle, Globe } from "lucide-react";
 import { errorText, useT } from "@/i18n";
 import { api } from "@/lib/api";
+import { addToRoom, playQueued } from "@/lib/addToRoom";
 import { UploadPanel } from "./UploadPanel";
 import { BrowseSheet } from "./BrowseSheet";
 import { inApp } from "@/lib/native";
@@ -16,6 +17,7 @@ export const SourcePanel = ({ code, ident, video, upload, drive, pick, onRoom })
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState(null);
   const [sheet, setSheet] = useState(false); // the web's "browse sites" screen
+  const started = useRef(0); // when the sheet last started a video: the room's update may not have arrived yet
   const imp = drive.imp;
   const isDrive = /drive\.google\.com/i.test(url);
 
@@ -23,6 +25,28 @@ export const SourcePanel = ({ code, ident, video, upload, drive, pick, onRoom })
   const bring = async (link) => {
     if (/drive\.google\.com/i.test(link)) await drive.start(link);
     else onRoom(await api.setVideo(code, ident, link));
+  };
+
+  // The browse sheet brings one video after another: the first plays when nothing is on, the next ones are queued
+  // (lib/addToRoom.js). It stays open and says which; a queued one can still be played at once.
+  const bringFromSheet = async (link) => {
+    if (/drive\.google\.com/i.test(link)) {
+      await drive.start(link);
+      return { drive: true };
+    }
+    const out = await addToRoom({ code, ident, isHost: true, hasVideo: !!video || Date.now() - started.current < 15000, url: link });
+    if (out.room) {
+      started.current = Date.now();
+      onRoom(out.room);
+    }
+    const playNow = out.canPlayNow
+      ? async () => {
+          const room = await playQueued({ code, ident, itemId: out.itemId });
+          started.current = Date.now();
+          onRoom(room);
+        }
+      : null;
+    return { queued: out.queued, playNow };
   };
 
   const submit = async (e) => {
@@ -81,7 +105,7 @@ export const SourcePanel = ({ code, ident, video, upload, drive, pick, onRoom })
         </div>
       )}
       {shown && tab === "link" && <div className="inline-err" data-testid="source-error">{errorText(t, shown)}</div>}
-      {sheet && <BrowseSheet onClose={() => setSheet(false)} onBring={bring} />}
+      {sheet && <BrowseSheet onClose={() => setSheet(false)} onBring={bringFromSheet} />}
     </section>
   );
 };

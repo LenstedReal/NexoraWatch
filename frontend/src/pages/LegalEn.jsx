@@ -30,7 +30,8 @@ export function PrivacyEn() {
         </li>
         <li>
           <b>Shared content:</b> video links added to the room; video files you upload; public files imported from Google Drive; the address
-          of a video detected in the in-app browser and the address of the page it is on.
+          of a video detected in the in-app browser and the address of the page it is on; a video link you share to Nexora Watch from
+          another app (e.g. TikTok).
         </li>
         <li>
           <b>Technical data:</b> IP address, request time, standard connection information sent by your device/browser, and sync
@@ -50,11 +51,6 @@ export function PrivacyEn() {
         <li>
           <b>Error reports:</b> if the app or the website runs into an error, the error message, technical trace, page, app version and
           browser information are sent. They contain no personal information.
-        </li>
-        <li>
-          <b>Subscription services (beta):</b> Netflix, Disney+, Prime Video or HBO Max are watched inside the app with your own account.
-          You sign in directly on the service's page; your password and the service's cookies stay only on your phone and never reach us. We
-          only sync play, pause and position information with the room.
         </li>
         <li>
           <b>Reports:</b> when you report a message or a person: the reason for the report, your note, a copy of the message concerned and
@@ -102,8 +98,10 @@ export function PrivacyEn() {
           device/app information under its own privacy policy.
         </li>
         <li>
-          <b>Video providers</b> (YouTube, TikTok, Facebook, Twitch, Vimeo): when a video from one of these sources is played in a room, the
-          provider's official player is loaded and the provider may process data under its own privacy policy.
+          <b>Video providers</b> (YouTube, TikTok, Facebook, Twitch, Kick, Vimeo): when a video from one of these sources is played in a
+          room, the provider's official player is loaded and the provider may process data under its own privacy policy. For X, Reddit and
+          Kick videos, the video file reaches each viewer's device directly from the provider's servers; the provider can see technical
+          data such as the IP address while it does.
         </li>
         <li>
           <b>YouTube (Google)</b>: when a YouTube video is played in a room, the official YouTube player is loaded and YouTube may process data

@@ -67,7 +67,7 @@ OWNER_ADDRESS = os.environ.get("OWNER_ADDRESS", "").strip()
 #                              Kick and Reddit may refuse servers, then the app's browser finds it in the page itself
 #                              (docs/BEKLEYENLER.md)
 #   not listed:                Instagram (its player has no control, its files open only on instagram.com),
-#                              Dailymotion (waits for its official player: docs/BEKLEYENLER.md), DRM/subscription services
+#                              Dailymotion (its official player needs a paid Edge Player ID: docs/BEKLEYENLER.md), DRM/subscription services
 # Drive files are added by their share link. Override with ALLOWED_SITES in .env ("domain|Name,...").
 _DEFAULT_SITES = ("youtube.com|YouTube,tiktok.com|TikTok,x.com|X,facebook.com|Facebook,twitch.tv|Twitch,kick.com|Kick,"
                   "reddit.com|Reddit,drive.google.com|Google Drive")

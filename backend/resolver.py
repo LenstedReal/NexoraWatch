@@ -5,6 +5,7 @@ import re
 import socket
 import json
 import time
+from html import unescape as html_unescape
 from urllib.parse import parse_qsl, quote, unquote, urlencode, urljoin, urlparse, urlunparse
 
 import httpx
@@ -126,14 +127,22 @@ _x_cache: dict = {}  # post id -> (expires at, result or ApiError)
 X_CACHE_MAX = 500
 
 # --- Facebook: official Embedded Video Player (https://developers.facebook.com/docs/plugins/embedded-video-player/api):
-# the JS SDK's fb-video with play / pause / seek / getCurrentPosition and events. fb.watch and /share/ short links can
-# only be opened by following Facebook's redirect, which is not an official API: the full link is asked for instead.
+# the JS SDK's fb-video with play / pause / seek / getCurrentPosition and events. Facebook's app copies share links
+# (fb.watch/…, facebook.com/share/v|r|p/…): the address they lead to is asked from Facebook the way a browser opening
+# the link would (its redirect, or the og:url / canonical address of the page), then the official player plays it.
 FB_HOSTS = {"facebook.com", "www.facebook.com", "m.facebook.com", "web.facebook.com", "mbasic.facebook.com"}
 FB_SHORT_HOSTS = {"fb.watch", "www.fb.watch"}
 FB_WATCH_PATHS = {"/watch", "/watch/", "/video.php", "/video/video.php", "/watch/live", "/watch/live/"}
 FB_VIDEOS = re.compile(r"^/([A-Za-z0-9.\-]{1,80})/videos/(?:[^/]{1,200}/)?(\d{6,20})/?$")
 FB_REEL = re.compile(r"^/reel/(\d{6,20})/?$")
 FB_SHARE = re.compile(r"^/share/(?:v|r)/[A-Za-z0-9]{4,30}/?$")
+FB_SHARE_ANY = re.compile(r"^/share/(?:v|r|p)/[A-Za-z0-9]{4,30}/?$")  # p = a post: expanded too, kept only when it is a video
+FB_SHORT_TEXT = "Facebook bu paylaşım bağlantısını açmadı; videoyu Facebook'ta açıp tam bağlantısını kopyala"
+FB_TAG = re.compile(r"<(?:meta|link)\b[^>]{0,600}>", re.I)
+FB_ATTR = re.compile(r"""([a-zA-Z:-]+)\s*=\s*(?:"([^"]*)"|'([^']*)')""")
+FB_EXPAND_TTL = 3600
+FB_EXPAND_MAX = 500
+_fb_cache: dict = {}  # share link -> (expires at, video address or None)
 
 
 async def _assert_public(host: str):
@@ -575,7 +584,7 @@ def _youtube(url: str) -> dict | None:
 async def _official(url: str, parsed) -> dict | None:
     """The site's own player for a page of a supported site (YouTube, Vimeo, Twitch, Kick, Instagram, X, Facebook, TikTok)."""
     return (_youtube(url) or _vimeo(url, parsed) or _twitch(url, parsed) or await _kick(url, parsed) or _instagram(url, parsed)
-            or await _x(url, parsed) or _facebook(url, parsed) or await _tiktok(url, parsed) or await _reddit(url, parsed))
+            or await _x(url, parsed) or await _facebook_link(url, parsed) or await _tiktok(url, parsed) or await _reddit(url, parsed))
 
 
 def _embed_base(url: str, kind: str) -> dict:
@@ -897,12 +906,98 @@ async def _x(url: str, parsed) -> dict | None:
     return {"url": f"https://x.com/i/status/{vid}", "video_id": vid, "embed_url": None, "title": found["title"], "warning": None, **c}
 
 
+def _fb_video_page(u: str) -> str | None:
+    """u itself when it is the address of a Facebook video or reel (what _facebook reads), else None."""
+    p = urlparse(u)
+    if (p.hostname or "").lower() not in FB_HOSTS:
+        return None
+    path = p.path or ""
+    if path in FB_WATCH_PATHS:
+        return u if re.fullmatch(r"\d{6,20}", dict(parse_qsl(p.query)).get("v", "")) else None
+    return u if FB_VIDEOS.match(path) or FB_REEL.match(path) else None
+
+
+def _fb_from_page(body: str) -> str | None:
+    """The video address a Facebook page names for itself (og:url, or its canonical link)."""
+    for tag in FB_TAG.findall(body):
+        attrs = {k.lower(): html_unescape(a or b) for k, a, b in FB_ATTR.findall(tag)}
+        if attrs.get("property") == "og:url" or attrs.get("rel") == "canonical":
+            found = _fb_video_page(attrs.get("content") or attrs.get("href") or "")
+            if found:
+                return found
+    return None
+
+
+async def _fb_follow(url: str) -> str | None:
+    """Where a Facebook share link leads, asked like a phone's browser opening it: Facebook's redirects (at most 5, only
+    to Facebook's own hosts; a login page's "next" counts), or the og:url / canonical address of the page it answers
+    with. None when Facebook does not say (a login wall) or cannot be reached. Tests replace this."""
+    cur = url
+    headers = {"User-Agent": BROWSER_UA, "Accept": "text/html,application/xhtml+xml", "Accept-Language": "en-US,en;q=0.8",
+               "Sec-Fetch-Mode": "navigate", "Sec-Fetch-Dest": "document", "Sec-Fetch-Site": "none"}
+    try:
+        async with httpx.AsyncClient(follow_redirects=False, timeout=8, event_hooks={"request": [_guard]}) as c:
+            for _ in range(5):
+                async with c.stream("GET", cur, headers=headers) as r:
+                    loc = r.headers.get("location", "")
+                    if loc and 300 <= r.status_code < 400:
+                        nxt = urljoin(cur, loc)
+                        if _fb_video_page(nxt):
+                            return nxt
+                        p = urlparse(nxt)
+                        if (p.hostname or "").lower() not in FB_HOSTS | FB_SHORT_HOSTS:
+                            return None
+                        later = dict(parse_qsl(p.query)).get("next", "")
+                        if later and _fb_video_page(later):
+                            return later
+                        cur = nxt
+                        continue
+                    if r.status_code >= 400:
+                        return None
+                    body = b""
+                    async for chunk in r.aiter_bytes():
+                        body += chunk
+                        if len(body) > 512 * 1024:
+                            break
+                    return _fb_from_page(body.decode("utf-8", "replace"))
+    except (ApiError, httpx.HTTPError):
+        return None
+    return None
+
+
+async def _fb_expand(url: str) -> str | None:
+    """_fb_follow, remembered for an hour (a share link always leads to the same video)."""
+    now = time.time()
+    hit = _fb_cache.get(url)
+    if hit and hit[0] > now:
+        return hit[1]
+    found = await _fb_follow(url)
+    if len(_fb_cache) >= FB_EXPAND_MAX:
+        _fb_cache.clear()
+    _fb_cache[url] = (now + (FB_EXPAND_TTL if found else 120), found)
+    return found
+
+
+async def _facebook_link(url: str, parsed) -> dict | None:
+    """A Facebook link as people copy it: a share link is first turned into the video's own address."""
+    host = (parsed.hostname or "").lower()
+    path = parsed.path or ""
+    if host in FB_SHORT_HOSTS or (host in FB_HOSTS and FB_SHARE_ANY.match(path)):
+        real = await _fb_expand(url)
+        if real:
+            return _facebook(real, urlparse(real))
+        if host in FB_SHORT_HOSTS or FB_SHARE.match(path):
+            raise ApiError(422, "fb_short", FB_SHORT_TEXT)
+        raise ApiError(422, "social_link", "Bu bağlantıda tek bir video yok; videonun kendi bağlantısını kopyala")
+    return _facebook(url, parsed)
+
+
 def _facebook(url: str, parsed) -> dict | None:
     """A Facebook video / reel -> the official Embedded Video Player (synced through its JS API)."""
     host = (parsed.hostname or "").lower()
     path = parsed.path or ""
     if host in FB_SHORT_HOSTS or (host in FB_HOSTS and FB_SHARE.match(path)):
-        raise ApiError(422, "fb_short", "Facebook kısa bağlantıları açılamıyor; videoyu Facebook'ta açıp tam bağlantısını kopyala")
+        raise ApiError(422, "fb_short", FB_SHORT_TEXT)
     if host not in FB_HOSTS:
         return None
     vid = href = None
