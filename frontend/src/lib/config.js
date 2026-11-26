@@ -9,7 +9,7 @@ export const DEFAULT_CONFIG = {
     { domain: "facebook.com", name: "Facebook" },
     { domain: "twitch.tv", name: "Twitch" },
     { domain: "kick.com", name: "Kick" },
-    { domain: "reddit.com", name: "Reddit" },
+    { domain: "reddit.com", name: "Reddit", app_only: true, beta: true },
     { domain: "drive.google.com", name: "Google Drive" },
   ],
   web_url: "https://nexora.lenstedreal.info",

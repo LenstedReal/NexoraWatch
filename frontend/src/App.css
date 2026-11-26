@@ -102,6 +102,7 @@ input:focus{border-color:var(--pu)}
 .sound{position:absolute;z-index:5;left:50%;bottom:14px;transform:translateX(-50%);display:inline-flex;gap:8px;align-items:center;padding:10px 16px;border-radius:99px;background:#000c;border:1px solid #fff3;color:#fff;font:600 13px var(--font);backdrop-filter:blur(12px);animation:pop .25s ease both;white-space:nowrap}
 .fatal{position:absolute;inset:0;z-index:6;background:#07070bf2;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;text-align:center;padding:16px;color:var(--err)}
 .fatal b{color:#fff;font:700 16px var(--head)}.fatal span{color:var(--mut);font-size:13px;max-width:360px}
+.fatal .fatal-why{color:var(--mut);opacity:.75;font-size:11px;max-width:360px;word-break:break-word}
 .hint{color:var(--warn);font-size:12px;padding:8px 14px}
 
 /* ---------- Source (host) ---------- */
@@ -318,9 +319,12 @@ html.in-app .lp-nav-cta,html.in-app [data-testid="cta-store"],html.in-app .lp-so
 /* fullscreen: the picture fills the screen */
 .stage:fullscreen{width:100vw;height:100vh;max-height:none;aspect-ratio:auto;border:0;border-radius:0}
 .consent .guardian{max-width:380px;color:var(--mut);font-size:12.5px;line-height:1.5;text-align:center}
-/* src2: Facebook's SDK sizes its player by data-width; let it fill the stage */
+/* src2: Facebook's SDK sizes its player by data-width; its frame keeps that size, fitted (zoom, FacebookPlayer.jsx)
+   and centred in the picture: a reel is never cut */
 .fb-host{background:#000}
 .fb-host .fb-video,.fb-host .fb-video>span{width:100%!important;height:100%!important;display:block}
+.fb-host .fb-video>span{display:flex!important;align-items:center;justify-content:center}
+.fb-host .fb-video iframe{position:relative!important;inset:auto!important;flex:none;max-width:none;max-height:none}
 
 /* Queue ("Sıra") */
 .q-card{margin-top:12px}

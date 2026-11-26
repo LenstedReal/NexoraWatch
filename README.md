@@ -16,9 +16,13 @@ Arkadaşlarınla aynı videoyu **aynı anda** izlediğin, Rave benzeri birlikte 
 | Facebook videoları | resmî oynatıcı (JS SDK). Facebook uygulamasının kopyaladığı paylaşım bağlantıları (fb.watch, facebook.com/share/…) videonun kendi adresine çevrilir (1.8.5) | var |
 | Twitch | resmî oynatıcı: kayıtlı yayınlar ve canlı yayınlar; dik ekranda da oynar (oynatıcı 400×300'ün altına inmez, CSS zoom ile küçültülerek çizilir, 1.8.4) | kayıtlarda tam; canlıda herkes canlıyı izler, oynat/durdur eşit |
 | Kick | canlı yayın, kayıt, klip: Kick'in kendi oynatıcısının aldığı HLS, kendi oynatıcımızda. Kick sunucumuza kanalı vermezse ya da yayın sunucusu başka sitelere kapalıysa canlı kanal Kick'in resmî gömme oynatıcısında açılır (1.8.4) | kayıtlarda tam; canlıda herkes aynı gecikmeyle canlıda, oynat/durdur eşit (Kick'in gömme oynatıcısında da: oda sahibi durdurunca yayın herkeste durur, oynatınca herkes canlıya döner) |
-| Reddit | gönderinin Reddit HLS videosu, kendi oynatıcımızda. Reddit sunucumuza gönderiyi vermezse sitede gönderiyi izleyicinin kendi tarayıcısı okur (1.8.5) | var |
+| Reddit (yalnızca uygulamada, beta) | uygulamanın tarayıcısının sayfada bulduğu Reddit videosu, kendi oynatıcımızda. Reddit sunucumuza gönderi vermediği için web listesinde yok, "yalnızca uygulamada (beta)" olarak anılır (1.8.6) | var |
 | Google Drive | herkese açık dosya içe aktarılır | var |
 | MP4 / M3U8 bağlantısı, telefondan yüklenen video | kendi oynatıcımız (kalite, altyazı, sıra) | var |
+
+**Dikey videolar (1.8.6).** TikTok, YouTube Shorts, Facebook Reels ve dikey dosyalar dik tutulan telefonda 3:4'lük daha uzun bir resimde oynar (16:9'luk şeridin ortasında küçücük kalmaz, oynatıcı da daha iyi kalite seçer). Facebook'un oynatıcısı artık kesilmez: resme sığdırılıp ortalanır (önce yalnızca üst kısmı büyütülmüş görünüyordu). Yatay telefon, tam ekran ve geniş ekranlar eskisi gibi.
+
+**Uygulamanın tarayıcısı (1.8.6).** Sitenin Paylaş → Bağlantıyı kopyala düğmesi videoyu listeye ekler (TikTok kısa bağlantıları dahil); "Geçiş engellendi" uyarısı hangi siteye gidilmek istendiğini yazar; TikTok'un giriş ve güvenlik doğrulama sayfalarına izin var. Oynatıcı hata verirse hata kutusunun altında oynatıcının kendi teknik açıklaması (ör. `hls fragLoadError 403`) küçük yazıyla görünür.
 
 **Art arda video ekleme (1.8.5).** Gezinirken bulunan videolar sırayla odaya gider: oda boşsa ilki hemen oynar, sonrakiler sıraya girer ve biri bitince sıradaki kendiliğinden başlar; oda sahibi sıradakini "Şimdi oynat" ile hemen açabilir. Bağlantı kutusundaki "Ayarla" bu kuralın dışındadır, her zaman hemen oynatır.
 - Uygulamanın tarayıcısı video seçilince kapanmaz; her satır "Odaya eklendi", "Sıraya eklendi" ya da hatayı gösterir. Tarayıcı kapatılınca sayfa arkada (sessiz, durdurulmuş) 10 dakika açık kalır, yeniden açınca kaldığı yerden sürer. Sitelere uygulama içi tarayıcı olarak değil, telefonun Chrome'u olarak görünür.

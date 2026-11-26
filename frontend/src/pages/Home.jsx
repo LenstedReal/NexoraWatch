@@ -272,10 +272,13 @@ export default function Home() {
           <p>{t("lp_p_sites")}</p>
         </div>
         <div className="lp-sites">
-          {cfg.allowed_sites.map((s) => (
+          {cfg.allowed_sites.filter((s) => !s.app_only).map((s) => (
             <span key={s.domain} className="lp-site"><Globe size={14} /> {s.name}<small>{s.domain}</small></span>
           ))}
         </div>
+        {cfg.allowed_sites.some((s) => s.app_only) && (
+          <p className="lp-app-only" data-testid="sites-app-only">{t("lp_app_only", { names: cfg.allowed_sites.filter((s) => s.app_only).map((s) => s.name).join(", ") })}</p>
+        )}
       </section>
 
       <section className="lp-section">

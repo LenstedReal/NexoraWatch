@@ -154,8 +154,9 @@ function scanTikTok(){
       if(!v.paused&&v.readyState>=2)vis+=vh;
       if(vis>score){score=vis;best=v;}
     }
-    for(var el=best,d=0;el&&d<10;el=el.parentElement,d++){
+    for(var el=best,d=0;el&&d<12;el=el.parentElement,d++){
       var idm=(el.id||'').match(/(\d{15,21})/);
+      if(!idm&&el.attributes){for(var ai=0;ai<el.attributes.length&&!idm;ai++){var an=el.attributes[ai].name;if(an==='class'||an==='style'||an==='src')continue;idm=String(el.attributes[ai].value).match(/(?:^|\D)([67]\d{18})(?:\D|$)/);}}
       if(idm){item(idm[1],'','',true);return;}
       if(d<=4&&el.querySelector){var a=el.querySelector('a[href*="/video/"]'),hm=a&&(a.getAttribute('href')||'').match(VID);if(hm){item(hm[2],hm[1],'',true);return;}}
     }
@@ -240,6 +241,30 @@ function extract(){
     }
   }catch(e){}
 }
+// A link the person copies or shares on the page (TikTok's Share -> Copy link, any site's share button): reported,
+// the app adds it as the video on screen when it is one. Nothing is read from the clipboard; only what the page writes.
+var lastCopy='';
+function copied(text,how){
+  try{
+    var m=typeof text==='string'&&text.match(/https?:\/\/[^\s"'<>]+/);
+    if(!m||m[0]===lastCopy)return;
+    lastCopy=m[0];setTimeout(function(){lastCopy=''},1500);
+    post({t:'copied',url:m[0],how:how,page:location.href,title:document.title});
+  }catch(e){}
+}
+try{var cb=navigator.clipboard;if(cb&&cb.writeText&&!cb.__nx){var ow=cb.writeText;cb.writeText=function(x){copied(String(x),'clipboard');return ow.apply(cb,arguments)};cb.__nx=1;}}catch(e){}
+try{var DT=window.DataTransfer&&DataTransfer.prototype,osd=DT&&DT.setData;if(osd)DT.setData=function(ty,v){try{if(/text/i.test(String(ty)))copied(String(v),'copy')}catch(e){}return osd.apply(this,arguments)};}catch(e){}
+document.addEventListener('copy',function(){
+  try{
+    var a=document.activeElement,s='';
+    if(a&&(a.tagName==='TEXTAREA'||a.tagName==='INPUT')&&typeof a.selectionStart==='number')s=String(a.value||'').substring(a.selectionStart,a.selectionEnd);
+    if(!s&&window.getSelection)s=String(window.getSelection());
+    copied(s,'copy');
+  }catch(e){}
+},true);
+// Share buttons: the shared link is taken (Android's WebView has no share sheet of its own).
+try{Object.defineProperty(navigator,'share',{configurable:true,value:function(d){copied(String((d&&(d.url||d.text))||''),'share');return Promise.resolve();}});
+Object.defineProperty(navigator,'canShare',{configurable:true,value:function(){return true}});}catch(e){}
 var lastHref='',lastTitle='';
 function nav(){
   if(!top)return;
@@ -265,7 +290,9 @@ const TWITCH_PAGES = new Set(["directory", "videos", "settings", "downloads", "s
 const TWITCH_VOD_RE = /^https?:\/\/(?:www\.|m\.)?twitch\.tv\/(?:videos|[A-Za-z0-9_]{3,25}\/(?:v|video))\/(\d{6,12})\/?(?:[?#]|$)/i;
 const ARCHIVE_RE = /^https?:\/\/(?:www\.)?archive\.org\/details\/([A-Za-z0-9][A-Za-z0-9._-]{0,99})(?:[/?#]|$)/i;
 // src2: TikTok / Facebook posts: the page address is offered; the room plays it in the official embed.
-const TIKTOK_RE = /^https?:\/\/(?:www\.|m\.)?tiktok\.com\/@[\w.-]+\/video\/(\d{15,21})/i;
+const TIKTOK_RE = /^https?:\/\/(?:www\.|m\.)?tiktok\.com\/(?:@[\w.-]+\/video\/|v\/)(\d{15,21})/i;
+// TikTok's short share links (Share -> Copy link): the server finds the video through TikTok's oEmbed.
+const TIKTOK_SHORT = /^https?:\/\/(?:(?:vm|vt)\.tiktok\.com\/|(?:www\.|m\.)?tiktok\.com\/t\/)([A-Za-z0-9]{5,20})\/?(?:[?#]|$)/i;
 const X_RE = /^https?:\/\/(?:www\.|mobile\.)?(?:x|twitter)\.com\/(?:([A-Za-z0-9_]{1,15})|i(?:\/web)?)\/status(?:es)?\/(\d{15,21})(?:[/?#]|$)/i;
 const FB_RE = /^https?:\/\/(?:www\.|m\.|web\.)?facebook\.com\/(?:watch\/?\?(?:.*&)?v=(\d{6,20})|[\w.-]+\/videos\/(?:[\w.-]+\/)?(\d{6,20})|reel\/(\d{6,20}))/i;
 // Sites whose page (or post) is offered, never a file the page loads: the server turns the page into the room's video,
@@ -306,7 +333,11 @@ export function xItem(id: string, author: string, title: string, page: string, c
 /** The page being viewed, when it is a video of a site with an official player (or an Internet Archive item). */
 export function pageOffer(url: string, title: string, fallbackTitle: string): DetectedMedia | null {
   const yt = url.match(YT_RE);
-  if (yt) return { url: `https://www.youtube.com/watch?v=${yt[1]}`, kind: "youtube", page: url, title: title || fallbackTitle, how: "page" };
+  // A Short keeps its Shorts address: the room shows it in a tall (vertical) picture.
+  if (yt) {
+    const short = /youtube\.com\/shorts\//i.test(url);
+    return { url: short ? `https://www.youtube.com/shorts/${yt[1]}` : `https://www.youtube.com/watch?v=${yt[1]}`, kind: "youtube", page: url, title: title || fallbackTitle, how: "page" };
+  }
   const vm = url.match(VIMEO_RE);
   if (vm) return { url: `https://vimeo.com/${vm[1]}${vm[2] ? `/${vm[2]}` : ""}`, kind: "vimeo", page: url, title: title || "Vimeo", how: "page" };
   const tv = url.match(TWITCH_VOD_RE);
@@ -331,6 +362,16 @@ export function pageOffer(url: string, title: string, fallbackTitle: string): De
   return null;
 }
 const MAX_ITEMS = 20;
+
+/** A link the person copied or shared on a page (Share -> Copy link): the video it points to, or null. */
+export function copiedOffer(raw: string, title: string, page: string, fallbackTitle: string): DetectedMedia | null {
+  const url = raw.trim().replace(/[)\].,;!]+$/, "");
+  const offer = pageOffer(url, title, fallbackTitle);
+  if (offer) return { ...offer, page, how: "copied", weak: offer.kind === "tiktok" ? true : offer.weak };
+  const s = url.match(TIKTOK_SHORT);
+  if (s) return { url: url.split(/[?#]/)[0], kind: "tiktok", page, title: "TikTok", how: "copied", key: `tiktok:short:${s[1]}`, weak: true };
+  return null;
+}
 
 // Reddit's player loads one video as many files (the main playlist, each quality's playlist, picture-only and
 // sound-only files). One row per video: its main playlist (picture and sound), with the post's title when known.
@@ -375,8 +416,12 @@ export function hostOf(url: string): string {
 const ALIASES: Record<string, string> = { "youtu.be": "youtube.com", "fb.watch": "facebook.com", "twitter.com": "x.com",
   "mobile.twitter.com": "x.com", "vm.tiktok.com": "tiktok.com", "vt.tiktok.com": "tiktok.com" };
 
-// Pages the supported sites send you through (cookie consent). Allowed for navigation only; never a video source.
-const HELPER_HOSTS = ["consent.google.com", "consent.youtube.com"];
+// Pages the supported sites send you through (cookie consent, TikTok's sign-in and security check, Apple / X sign-in
+// for an account on a supported site). Allowed for navigation only; never a video source.
+const HELPER_HOSTS = ["consent.google.com", "consent.youtube.com", "appleid.apple.com", "api.twitter.com"];
+const HELPER_DOMAINS = ["tiktokv.com", "tiktokv.us", "tiktokv.eu", "tiktokw.us", "tiktokw.eu", "tiktokcdn.com", "tiktokcdn-us.com",
+  "tiktokcdn-eu.com", "ttwstatic.com", "byteoversea.com", "ibytedtos.com", "bytedance.com"];
+export const isHelperHost = (host: string) => HELPER_HOSTS.includes(host) || HELPER_DOMAINS.some((d) => host === d || host.endsWith(`.${d}`));
 
 export function isAllowedHost(host: string, sites: SiteInfo[]): boolean {
   const h = ALIASES[host] ?? host;
@@ -477,6 +522,16 @@ export function BrowserModal({
   const pageHost = useRef("");
   const lastPage = useRef<string | null>(null);
   const loaded = useRef(false); // a page of the opened site has loaded (a refused link then leaves it on screen)
+  const leftAt = useRef(0);
+  // The page tried to go to a site outside the list: refused, with the site's name. Nothing loaded yet (the site
+  // redirected straight away): back to the site list, not a black page; once a page of the site is on screen it stays.
+  const leave = (host: string) => {
+    say(host === "accounts.google.com" ? t("b_no_login") : t("b_blocked_nav", { host }));
+    if (!loaded.current) {
+      setUrl(null);
+      setAddress("");
+    }
+  };
 
   useEffect(() => {
     // Drive needs a Google sign-in, which Google blocks inside in-app browsers: Drive links are added by pasting
@@ -696,6 +751,11 @@ export function BrowserModal({
                     <Text style={styles.siteDomain} numberOfLines={1}>
                       {s.domain}
                     </Text>
+                    {s.beta && (
+                      <View style={styles.siteBeta}>
+                        <Badge text={t("sp_beta")} color={C.warning} />
+                      </View>
+                    )}
                   </Pressable>
                 ))}
               </View>
@@ -718,27 +778,35 @@ export function BrowserModal({
               injectedJavaScriptBeforeContentLoadedForMainFrameOnly={false}
               onShouldStartLoadWithRequest={(r) => {
                 if (r.url === "about:blank") return true;
+                // iOS tells a frame's navigation apart (isTopFrame false: let through). Android asks only about the
+                // page itself for web addresses (a frame's http(s) loads never come here), and about any frame for
+                // other schemes (an app's link in a hidden frame).
                 const top = (r as any).isTopFrame !== false;
                 if (isAppLink(r.url)) {
                   // "Open the app" buttons (intent://, the store, app links): refused, the page stays as it was.
                   if (top && /^https?:/i.test(r.url)) say(t("b_app_link"));
-                  return !top && /^https?:/i.test(r.url) ? true : false;
+                  return !top && /^https?:/i.test(r.url);
                 }
                 if (!top) return true;
                 const host = hostOf(r.url);
-                if (isAllowedHost(host, sites) || HELPER_HOSTS.includes(host)) return true;
-                say(host === "accounts.google.com" ? t("b_no_login") : t("b_blocked_nav"));
-                // Nothing loaded yet (the site redirected straight away): back to the site list, not a black page.
-                // Once a page of the site is on screen it stays there.
-                if (!loaded.current) {
-                  setUrl(null);
-                  setAddress("");
-                }
+                if (isAllowedHost(host, sites) || isHelperHost(host)) return true;
+                leave(host);
                 return false;
+              }}
+              onLoadStart={(e) => {
+                // A form sent with POST (a sign-in) is not asked about above on Android: the page is stopped here.
+                const u = e.nativeEvent.url || "";
+                if (!/^https?:/i.test(u)) return;
+                const host = hostOf(u);
+                if (isAllowedHost(host, sites) || isHelperHost(host)) return;
+                web.current?.stopLoading();
+                leave(host);
               }}
               onNavigationStateChange={(s) => {
                 setNav({ back: s.canGoBack, fwd: s.canGoForward, loading: s.loading });
                 if (s.loading) return;
+                // A sign-in / consent page on the way, or a page being sent back: the site's address and list stay.
+                if (/^https?:/i.test(s.url) && !isAllowedHost(hostOf(s.url), sites)) return;
                 if (/^https?:/i.test(s.url)) loaded.current = true;
                 setAddress(s.url);
                 if (/^https?:/i.test(s.url)) lastPage.current = s.url;
@@ -762,10 +830,37 @@ export function BrowserModal({
                 }
                 if (m?.t === "nav" && typeof m.url === "string") {
                   // The page changed without loading (TikTok, YouTube are single-page apps).
-                  if (!isAllowedHost(hostOf(m.url), sites)) return;
+                  const h = hostOf(m.url);
+                  if (!isAllowedHost(h, sites)) {
+                    // A page outside the supported sites came up after all (a POST, see onLoadStart): back.
+                    if (h && !isHelperHost(h) && Date.now() - leftAt.current > 1500) {
+                      leftAt.current = Date.now();
+                      if (loaded.current) web.current?.goBack();
+                      else {
+                        setUrl(null);
+                        setAddress("");
+                      }
+                    }
+                    return;
+                  }
                   lastPage.current = m.url;
                   setAddress(m.url);
                   offerPage(m.url, String(m.title || ""));
+                  return;
+                }
+                if (m?.t === "copied" && typeof m.url === "string") {
+                  // A link copied or shared on the page (TikTok's Share -> Copy link): the video on screen.
+                  const page = String(m.page || "");
+                  if (!isAllowedHost(hostOf(page), sites)) return;
+                  const it = copiedOffer(m.url, String(m.title || ""), page, t("yt_video"));
+                  if (!it || !isAllowedHost(hostOf(it.url), sites)) {
+                    say(t("b_copy_none"));
+                    return;
+                  }
+                  addItem(it);
+                  setCurrent(it.key ?? it.url);
+                  setListOpen(true);
+                  say(t("b_copy_found"), "ok");
                   return;
                 }
                 if (m?.t === "item" && m.site === "reddit" && typeof m.id === "string") {
@@ -943,6 +1038,7 @@ const styles = StyleSheet.create({
   siteLetter: { color: C.text, fontSize: 18, fontWeight: "900" },
   siteName: { color: C.text, fontSize: 15, fontWeight: "800" },
   siteDomain: { color: C.muted, fontSize: 11 },
+  siteBeta: { position: "absolute", top: 8, right: 8 },
   legal: { flexDirection: "row", gap: 8, padding: 12, backgroundColor: C.card, borderRadius: R.md, borderWidth: 1, borderColor: C.border },
   legalText: { flex: 1, color: C.muted, fontSize: 12, lineHeight: 17 },
   bottom: { flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: 10, paddingTop: 8, backgroundColor: C.card, borderTopWidth: 1, borderTopColor: C.border },

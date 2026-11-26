@@ -47,10 +47,26 @@ function loadFacebook(lang) {
 
 let seq = 0;
 
-export const FacebookPlayer = ({ video, playerRef, events, onFatal, onFallback, lang = "tr" }) => {
+// CSS zoom carries into the frame in Chrome / Android WebView 128+ (as for Twitch); elsewhere the frame is scaled.
+const ZOOM = typeof window !== "undefined" && typeof window.CSS?.supports === "function" && window.CSS.supports("zoom", "0.5");
+/** A CSS length in pixels ("412px", or a bare number as in width="412"); 0 for anything else (%, auto, empty). */
+const px = (v) => {
+  const m = /^(\d+(?:\.\d+)?)(?:px)?$/.exec(String(v ?? "").trim());
+  return m ? Number(m[1]) : 0;
+};
+/** The scale that fits a w x h frame into a W x H area: never larger than the area; enlarged only with zoom. */
+export function fbFit(W, H, w, h, zoom = ZOOM) {
+  if (!(W > 0 && H > 0 && w > 0 && h > 0)) return 1;
+  const s = Math.min(W / w, H / h);
+  return Math.max(0.05, Math.min(zoom ? 4 : 1, s));
+}
+
+export const FacebookPlayer = ({ video, playerRef, events, onFatal, onFallback, onAspect, lang = "tr" }) => {
   const hostRef = useRef(null);
   const evRef = useRef(events);
   evRef.current = events;
+  const aspectRef = useRef(onAspect);
+  aspectRef.current = onAspect;
   const [fallback, setFallback] = useState(false);
   const href = video.href;
 
@@ -69,7 +85,12 @@ export const FacebookPlayer = ({ video, playerRef, events, onFatal, onFallback, 
     mount.setAttribute("data-autoplay", "false");
     mount.setAttribute("data-show-text", "false");
     mount.setAttribute("data-show-captions", "false");
-    mount.setAttribute("data-width", String(Math.max(220, Math.round(hostRef.current.clientWidth || 640))));
+    // Facebook makes its player as tall as the video is for this width. A reel (9:16) gets the width that makes it
+    // exactly as tall as the picture, so it shows whole and at its real size; anything else starts at the full width.
+    const W = hostRef.current.clientWidth || 640;
+    const H = hostRef.current.clientHeight || 360;
+    const width = /\/reel\//i.test(href) ? Math.min(W, (H * 9) / 16) : W;
+    mount.setAttribute("data-width", String(Math.max(220, Math.round(width))));
     hostRef.current.appendChild(mount);
     const st = { paused: true, buffering: false, waiters: [], inst: null };
     const settle = (ok) => { const w = st.waiters; st.waiters = []; w.forEach((f) => f(ok)); };
@@ -167,6 +188,44 @@ export const FacebookPlayer = ({ video, playerRef, events, onFatal, onFallback, 
       mount.remove();
     };
   }, [href, lang, fallback, playerRef, onFatal]);
+  // Facebook draws its player as tall as the video is for the width it was given: a reel is almost twice as tall as wide,
+  // and in a 16:9 picture only its upper part showed, enlarged. The frame is now fitted into the picture (zoom) and
+  // centred, never cut (also in fullscreen and on a sideways phone), and the room learns the video's shape (a vertical
+  // one gets a taller picture on an upright phone).
+  useEffect(() => {
+    const host = hostRef.current;
+    if (!host || typeof ResizeObserver === "undefined") return undefined;
+    let shape = null;
+    const fit = () => {
+      const frame = host.querySelector("iframe");
+      if (!frame) return;
+      const w = px(frame.style.width) || px(frame.getAttribute("width"));
+      const h = px(frame.style.height) || px(frame.getAttribute("height"));
+      if (w < 10 || h < 10 || !host.clientWidth || !host.clientHeight) return;
+      const s = fbFit(host.clientWidth, host.clientHeight, w, h);
+      const z = Math.abs(s - 1) > 0.005 ? String(Math.floor(s * 1000) / 1000) : "";
+      if (ZOOM) {
+        if (frame.style.zoom !== z) frame.style.zoom = z;
+      } else {
+        const tr = z ? `scale(${z})` : "";
+        if (frame.style.transform !== tr) frame.style.transform = tr;
+      }
+      const a = w / h;
+      if (shape === null || Math.abs(a - shape) > 0.01) {
+        shape = a;
+        aspectRef.current?.(a);
+      }
+    };
+    const ro = new ResizeObserver(fit);
+    ro.observe(host);
+    // Facebook sets the frame's size (attributes and style) when its player knows the video.
+    const mo = typeof MutationObserver === "undefined" ? null : new MutationObserver(fit);
+    mo?.observe(host, { childList: true, subtree: true, attributes: true, attributeFilter: ["width", "height", "style"] });
+    return () => {
+      ro.disconnect();
+      mo?.disconnect();
+    };
+  }, [fallback]);
   // Without Facebook's SDK the video could only play unsynced, which a watch-together room cannot use: show an error.
   useEffect(() => { if (fallback) { onFallback?.(); onFatal?.("facebook_sdk"); } }, [fallback, onFallback, onFatal]);
   if (fallback) return null;

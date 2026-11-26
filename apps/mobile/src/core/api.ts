@@ -63,7 +63,8 @@ async function req<T>(method: string, path: string, body?: unknown, timeoutMs = 
 const cred = (i: Identity) => ({ participant_id: i.participant_id, token: i.token });
 const q = (i: Identity) => `participant_id=${encodeURIComponent(i.participant_id)}&token=${encodeURIComponent(i.token)}`;
 
-export type SiteInfo = { domain: string; name: string };
+/** app_only / beta: offered only in the app's browser, marked beta (Reddit since 1.8.6). */
+export type SiteInfo = { domain: string; name: string; app_only?: boolean; beta?: boolean };
 export type AppConfig = {
   allowed_sites: SiteInfo[];
   web_url: string;
@@ -82,7 +83,7 @@ export const FALLBACK_CONFIG: AppConfig = {
     { domain: "facebook.com", name: "Facebook" },
     { domain: "twitch.tv", name: "Twitch" },
     { domain: "kick.com", name: "Kick" },
-    { domain: "reddit.com", name: "Reddit" },
+    { domain: "reddit.com", name: "Reddit", app_only: true, beta: true },
     { domain: "drive.google.com", name: "Google Drive" },
   ],
   web_url: WEB_URL,

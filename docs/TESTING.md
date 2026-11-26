@@ -6,6 +6,19 @@
 - `tests/upload_smoke.py <API> tests/sample.mp4` — multipart yükleme, Range 206, bayt eşleşmesi, yetkisiz silme/yükleme 403, kota 413, format 415.
 - Backend smoke (oda/rejoin/host-only/stale seq/WS hello-pong-push/kötü token/oda kalıcılığı) — sonuçlar `test_reports/`.
 
+## 1.8.6 (26 Kasım 2026): bu ortamda çalıştırılanlar
+- Sunucu: `cd backend && pytest -q tests/test_resolver_sources.py tests/test_services.py` → 111 geçti (ağ kapalı). Yeni:
+  site listesinde Reddit `app_only` + `beta`. Instagram eklenmedi: oynatıcısı dışarıdan kontrol edilemiyor, dosyaları yalnızca
+  instagram.com'da açılıyor; senkron olmadan kaynak eklenmiyor (bağlantı `no_sync_source` alır).
+- Web (Playwright, Chromium, ağ taklit): dikey videolar 39 kontrol (reel 3:4 resimde kesilmeden ve ortada, /watch arkasındaki
+  dikey video Facebook'un çerçevesinden anlaşılır, masaüstünde 16:9 kalır, kendi oynatıcımızda dosyanın şekli, sonraki video
+  öncekinin şeklini almaz, yatay telefon, TikTok/Shorts/normal YouTube); hata kutusunda oynatıcının kendi sözü; web listesinde
+  Reddit yok, "Reddit: yalnızca mobil uygulamada (beta)" notu var. Eski testler (kick, kontroller, 1.8.4, 1.8.5 51/51, Drive) geçti.
+- Uygulama: dedektör (TikTok Paylaş → Bağlantıyı kopyala: clipboard API, gizli metin + execCommand, seçim, clipboardData,
+  paylaşım sayfası; sarmalayıcının özniteliğindeki video kimliği), yardımcılar (kopyalanan bağlantı, TikTok kısa bağlantıları,
+  Shorts adresi, Instagram'ın teklif edilmemesi, yardımcı alan adları), App.tsx paketlenir, `tsc` temiz, 47/47 birim testi.
+- Gerçek telefonda denenmedi (bkz. BEKLEYENLER).
+
 ## 1.8.5 (26 Kasım 2026): bu ortamda çalıştırılanlar
 - Sunucu: `cd backend && pytest -q tests/test_resolver_sources.py tests/test_services.py` (ağ kapalı; Facebook'un yanıtları
   taklit). Yeni: Facebook paylaşım bağlantıları (fb.watch, /share/v|r|p/) yönlendirmeden, giriş sayfasının `next=`

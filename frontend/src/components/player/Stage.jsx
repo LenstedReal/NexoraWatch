@@ -27,7 +27,16 @@ export const Stage = ({ video, playback, isHost, ident, playerRef, sync, onAddVi
   const [retryKey, setRetryKey] = useState(0);
   const [media, setMedia] = useState(null); // {el, hls} of our own player while it is mounted
   const [kickOn, setKickOn] = useState(false); // Kick's embed: is the stream running (the room owner's button shows it)
-  const onFatal = useCallback((code) => setFatal(code), []);
+  // The picture's shape (width / height) once known: our own player reads it from the file, Facebook's from its frame.
+  // A vertical video gets a taller picture on an upright phone (stage.css .tall) instead of a narrow strip.
+  // Kept with the video it belongs to, so the next video never starts in the previous one's shape.
+  const [shape, setShape] = useState(null); // {id, a}
+  const idRef = useRef(null);
+  idRef.current = video?.media_id;
+  const onAspect = useCallback((a) => setShape(Number.isFinite(a) && a > 0 ? { id: idRef.current, a } : null), []);
+  const aspect = shape && shape.id === video?.media_id ? shape.a : null;
+  const [fatalWhy, setFatalWhy] = useState(null); // the player's own words for it (hls.js, the media element)
+  const onFatal = useCallback((code, why) => { setFatal(code); setFatalWhy(typeof why === "string" ? why : null); }, []);
   const sourceKey = `${video?.media_id || "none"}:${retryKey}`;
   const prev = useRef(video?.media_id);
   const stageRef = useRef(null);
@@ -35,6 +44,18 @@ export const Stage = ({ video, playback, isHost, ident, playerRef, sync, onAddVi
   const [wide, setWide] = useState(() => window.innerWidth > window.innerHeight);
 
   useEffect(() => { if (prev.current !== video?.media_id) { prev.current = video?.media_id; setFatal(null); setFbPlain(false); } }, [video?.media_id]);
+  useEffect(() => {
+    const el = media?.el;
+    if (!el) return undefined;
+    const read = () => { if (el.videoWidth > 0 && el.videoHeight > 0) onAspect(el.videoWidth / el.videoHeight); };
+    read();
+    el.addEventListener("loadedmetadata", read);
+    el.addEventListener("resize", read);
+    return () => {
+      el.removeEventListener("loadedmetadata", read);
+      el.removeEventListener("resize", read);
+    };
+  }, [media?.el, onAspect]);
   useEffect(() => {
     if (!app) return undefined;
     const onResize = () => setWide(window.innerWidth > window.innerHeight);
@@ -75,7 +96,7 @@ export const Stage = ({ video, playback, isHost, ident, playerRef, sync, onAddVi
   } else if (video.kind === "tiktok") { // src2: official embed player, postMessage API (synced)
     body = <TikTokPlayer key={sourceKey} video={video} isHost={isHost} playerRef={playerRef} events={sync.events} onFatal={onFatal} />;
   } else if (video.kind === "facebook") { // src2: official embedded video player, JS SDK (synced)
-    body = <FacebookPlayer key={sourceKey} video={video} lang={lang} playerRef={playerRef} events={sync.events} onFatal={onFatal} onFallback={onFbPlain} />;
+    body = <FacebookPlayer key={sourceKey} video={video} lang={lang} playerRef={playerRef} events={sync.events} onFatal={onFatal} onFallback={onFbPlain} onAspect={onAspect} />;
   } else if (SOCIAL_KINDS.has(video.kind)) { // src2: Instagram / X embeds without JS control (no sync)
     body = <SocialEmbed key={sourceKey} video={video} lang={lang} />;
   } else if (video.kind === "service") { // rave worker: the service plays in the app's ServicePlayer, this is only a card
@@ -95,6 +116,10 @@ export const Stage = ({ video, playback, isHost, ident, playerRef, sync, onAddVi
   // Our title, notes and buttons go to a bar under the picture (a side rail on a sideways phone). Only the guest lock,
   // which is transparent, lies over synced provider players.
   const prov = !!video && !own;
+  // Vertical: TikTok, YouTube Shorts and Facebook reels by their address (Facebook's frame may first show a 16:9 size
+  // while it loads, so a reel stays tall), anything else once its shape is known (our player, Facebook's frame).
+  const byAddress = video?.kind === "tiktok" || (video?.kind === "youtube" && /\/shorts\//i.test(video?.url || "")) || (video?.kind === "facebook" && /\/reel\//i.test(video?.href || ""));
+  const tall = !!video && (byAddress || (aspect != null && aspect < 0.9));
   const showPaused = video && !isHost && !embed && (prov || !bare) && playback && !playback.playing && !sync.stats.buffering && !fatal;
   const warning = video?.warning ? (video.warning_code && t(`warn_${video.warning_code}`) !== `warn_${video.warning_code}` ? t(`warn_${video.warning_code}`) : video.warning) : null;
   const pill = useSyncState(sync.stats.drift, own && !isHost && !!playback?.playing && video?.capabilities?.sync !== false && !sync.needsGesture && !sync.stats.buffering, video?.media_id);
@@ -114,6 +139,7 @@ export const Stage = ({ video, playback, isHost, ident, playerRef, sync, onAddVi
       <TriangleAlert size={28} />
       <b>{t("player_error")}</b>
       <span>{t(`err_${fatal}`) === `err_${fatal}` ? fatal : t(`err_${fatal}`)}</span>
+      {fatalWhy && <small className="fatal-why" data-testid="player-error-why">{fatalWhy}</small>}
       <button className="btn" onClick={() => { setFatal(null); setRetryKey((k) => k + 1); }} data-testid="player-retry-btn">{t("retry")}</button>
     </div>
   );
@@ -124,7 +150,7 @@ export const Stage = ({ video, playback, isHost, ident, playerRef, sync, onAddVi
 
   if (prov) {
     return (
-      <div className="stage prov" ref={stageRef} data-testid="video-stage">
+      <div className={`stage prov${tall ? " tall" : ""}`} ref={stageRef} data-testid="video-stage">
         <div className="stage-pic">
           {body}
           {lock}
@@ -162,7 +188,7 @@ export const Stage = ({ video, playback, isHost, ident, playerRef, sync, onAddVi
     );
   }
   return (
-    <div className={`stage${own ? " nxp" : ""}`} ref={stageRef} data-testid="video-stage">
+    <div className={`stage${own ? " nxp" : ""}${tall ? " tall" : ""}`} ref={stageRef} data-testid="video-stage">
       {body}
       {lock}
       {video && sync.stats.buffering && !fatal && <div className="loader" data-testid="buffering-indicator"><span className="ring" /></div>}

@@ -104,6 +104,12 @@ export function PrivacyEn() {
           data such as the IP address while it does.
         </li>
         <li>
+          <b>Reddit — mobile app only, beta</b>: Reddit videos can only be added from the app's browser; the app finds the video file the Reddit page you open plays, and it plays in sync for everyone in the room.
+        </li>
+        <li>
+          <b>Signing in and sharing in the in-app browser</b>: if you sign in to a site (e.g. TikTok, Facebook) in the browser, your sign-in details go directly to that site; Nexora Watch does not see or store them, and the session stays only in the browser data on your phone. When you tap Share or Copy link on a page, only the link the page copies is used to add that video to the list; nothing else on your clipboard is read.
+        </li>
+        <li>
           <b>YouTube (Google)</b>: when a YouTube video is played in a room, the official YouTube player is loaded and YouTube may process data
           under its own privacy policy. When a Google Drive link is imported, our server downloads the file from Google.
         </li>
@@ -153,7 +159,8 @@ export function TermsEn() {
       <p>
         Nexora Watch lets you create rooms, join with a code, chat, react, and play videos added to a room in sync across participants. Rooms
         expire after 24 hours. The service is provided "as is"; it is not guaranteed to work without interruption or errors, and features may
-        change without prior notice.
+        change without prior notice. The source marked "beta" (mobile app only: Reddit) is experimental; it may not work or may be
+        removed. When you use it, Reddit's own terms of use also apply.
       </p>
       <h2>3. Content and copyright responsibility</h2>
       <ul>

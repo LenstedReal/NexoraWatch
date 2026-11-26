@@ -531,6 +531,8 @@ def test_lists_offer_the_new_sites():
         pytest.skip("ALLOWED_SITES is set in the environment")
     # 1.8.3: the same list on the web and in the app; Kick (live too) and Reddit are back
     assert doms == ["youtube.com", "tiktok.com", "x.com", "facebook.com", "twitch.tv", "kick.com", "reddit.com", "drive.google.com"]
+    # 1.8.6: Reddit only in the app's browser, marked beta (the web names it under the list as "app only")
+    assert {s["domain"] for s in config.ALLOWED_SITES if s.get("app_only") and s.get("beta")} == {"reddit.com"}
     # still accepted as pages (links pasted, or a page picked in the app's browser)
     for h in ("www.twitter.com", "vm.tiktok.com", "old.reddit.com", "player.kick.com", "vimeo.com", "archive.org"):
         assert policy.is_allowed_site(h), h

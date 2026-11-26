@@ -69,6 +69,19 @@ alınabiliyor ve bu API Cloudflare bot denetiminin arkasında. Sunucudan gelen i
 
 **Yapılacak:** İlk sürümden sonra sitede bir Kick kanalı bağlantısı denenip sunucunun cevap alıp almadığı görülür.
 
+## 1.8.6: gerçek telefonda denenecekler (bu ortamda yapılamadı)
+
+- **TikTok (uygulamanın tarayıcısı):** akışta bir videoda Paylaş → Bağlantıyı kopyala: "Kopyaladığın video listeye eklendi"
+  yazmalı ve video listenin başında olmalı. "Geçiş engellendi (…)" çıkarsa parantez içindeki site adını bildir: o adres
+  TikTok'un geçtiği bir sayfaysa listeye eklenir. TikTok'a telefon/e-posta ile giriş denenmeli.
+- **HLS hatası:** HLS bir video açılmazsa hata kutusunun altındaki küçük yazının (ör. `hls manifestLoadError 403`) ekran
+  görüntüsü: asıl neden bundan anlaşılır.
+- **Dikey videolar:** Facebook Reels, TikTok, Shorts ve dikey bir dosya iki telefonda: resim 3:4, video kesilmeden ve ortada.
+- **Instagram:** eklenmedi. Resmî oynatıcısı dışarıdan kontrol edilemiyor, dosyaları yalnızca instagram.com'da açılıyor:
+  herkeste aynı anda oynatılamıyor. Kural: senkron olmayan kaynak eklenmez.
+- **Reddit yüksek kalite:** yapılmadı. Reddit akışındaki oynatıcı `f=sd` (düşük kalite) listesi veriyor; yüksek kalite
+  listesinin herkeste açıldığı canlı Reddit'te denenmeden eklenmedi.
+
 ## 1.8.5: gerçek telefonda denenecekler (bu ortamda yapılamadı)
 
 - **Paylaş → Nexora Watch:** TikTok uygulamasında bir videoda Paylaş → (diğer uygulamalar) → Nexora Watch. Bir oda

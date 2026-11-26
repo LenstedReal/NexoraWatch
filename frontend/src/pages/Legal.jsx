@@ -107,6 +107,12 @@ function PrivacyTr() {
           teknik verileri görebilir.
         </li>
         <li>
+          <b>Reddit — yalnızca mobil uygulamada, beta</b>: Reddit videoları yalnızca uygulamanın tarayıcısından eklenebilir; uygulama, açtığın Reddit sayfasının oynattığı video dosyasını bulur ve odada herkeste aynı anda oynatır.
+        </li>
+        <li>
+          <b>Uygulama içi tarayıcıda giriş ve paylaşım</b>: tarayıcıda bir siteye (ör. TikTok, Facebook) giriş yaparsan giriş bilgilerin doğrudan o siteye gider; Nexora Watch bunları görmez ve saklamaz, oturum yalnızca telefonundaki tarayıcı verisinde kalır. Sayfada Paylaş veya Bağlantıyı kopyala düğmesine bastığında, yalnızca sayfanın kopyaladığı bağlantı o videoyu listeye eklemek için kullanılır; panonun geri kalanı okunmaz.
+        </li>
+        <li>
           <b>YouTube (Google)</b>: odada bir YouTube videosu oynatıldığında resmi YouTube oynatıcısı yüklenir ve YouTube kendi gizlilik
           politikası kapsamında veri işleyebilir. Google Drive bağlantısı içe aktarıldığında sunucumuz dosyayı Google'dan indirir.
         </li>
@@ -153,7 +159,9 @@ function TermsTr() {
       <p>
         Nexora Watch; oda oluşturma, kod ile katılma, sohbet, tepki ve odaya eklenen videoların katılımcılar arasında eşzamanlı
         oynatılmasını sağlar. Odalar 24 saat sonra sona erer. Hizmet "olduğu gibi" sunulur; kesintisiz veya hatasız çalışacağı garanti
-        edilmez ve özellikler önceden haber verilmeksizin değiştirilebilir.
+        edilmez ve özellikler önceden haber verilmeksizin değiştirilebilir. "Beta" olarak işaretli kaynak (yalnızca mobil uygulamada:
+        Reddit) deneme aşamasındadır; çalışmayabilir veya kaldırılabilir. Bu kaynağı kullanırken Reddit'in kendi kullanım koşulları
+        da geçerlidir.
       </p>
       <h2>3. İçerik ve telif sorumluluğu</h2>
       <ul>

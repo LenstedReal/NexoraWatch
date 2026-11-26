@@ -27,3 +27,12 @@
   .stage.prov .gesture,.stage.prov .sound{padding:0;width:40px;height:40px;justify-content:center;border-radius:12px}
   .stage.prov .stage-chip{padding:0;width:36px;height:36px;justify-content:center}
 }
+
+/* Vertical videos (TikTok, Shorts, reels, phone clips) on an upright phone: a taller picture (3:4) instead of a 16:9
+   strip with the video small in its middle (and the player picking a low quality for that small size).
+   Sideways phones, fullscreen and wide screens keep their layout. Stage.jsx sets .tall. */
+@media (max-width:959px) and (orientation:portrait){
+  .stage.tall:not(.prov):not(:fullscreen){aspect-ratio:3/4;max-height:64svh}
+  .stage.prov.tall:not(:fullscreen){max-height:none}
+  .stage.prov.tall:not(:fullscreen) .stage-pic{aspect-ratio:3/4;max-height:64svh}
+}

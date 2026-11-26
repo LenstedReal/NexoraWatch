@@ -66,11 +66,16 @@ OWNER_ADDRESS = os.environ.get("OWNER_ADDRESS", "").strip()
 #                              HLS): the server finds the file a pasted link leads to (resolver._x / _kick / _reddit);
 #                              Kick and Reddit may refuse servers, then the app's browser finds it in the page itself
 #                              (docs/BEKLEYENLER.md)
-#   not listed:                Instagram (its player has no control, its files open only on instagram.com),
-#                              Dailymotion (its official player needs a paid Edge Player ID: docs/BEKLEYENLER.md), DRM/subscription services
+#   only in the app (beta):    Reddit (its site refuses our server: the app's browser finds the video in the page; it
+#                              plays in our own player, in sync). The web lists it as "app only".
+#   not listed:                Instagram (its embed has no control and its files open only on instagram.com: it cannot
+#                              play in sync, 1.8.6 confirmed), Dailymotion (its official player needs a paid Edge Player ID:
+#                              docs/BEKLEYENLER.md), DRM/subscription services
 # Drive files are added by their share link. Override with ALLOWED_SITES in .env ("domain|Name,...").
 _DEFAULT_SITES = ("youtube.com|YouTube,tiktok.com|TikTok,x.com|X,facebook.com|Facebook,twitch.tv|Twitch,kick.com|Kick,"
                   "reddit.com|Reddit,drive.google.com|Google Drive")
+# Sites offered only in the app's browser, marked beta (APP_ONLY_SITES in .env, comma separated domains).
+APP_ONLY_SITES = {h.strip().lower().lstrip(".") for h in (os.environ.get("APP_ONLY_SITES") or "reddit.com").split(",") if h.strip()}
 # Reddit: no API key can be had any more (Reddit stopped taking new Data API requests on 31 Oct 2026), so the server
 # reads a post's public data without one; see docs/BEKLEYENLER.md.
 # Accepted as source pages too, but not listed: old X addresses, and sites whose links still play (in sync) when pasted.
@@ -80,7 +85,8 @@ for _item in (os.environ.get("ALLOWED_SITES") or _DEFAULT_SITES).split(","):
     _dom, _, _name = _item.strip().partition("|")
     _dom = _dom.strip().lower().lstrip(".")
     if _dom:
-        ALLOWED_SITES.append({"domain": _dom, "name": (_name.strip() or _dom)})
+        ALLOWED_SITES.append({"domain": _dom, "name": (_name.strip() or _dom),
+                              **({"app_only": True, "beta": True} if _dom in APP_ONLY_SITES else {})})
 
 _DEFAULT_BLOCKED = ("netflix.com,disneyplus.com,primevideo.com,amazon.com,max.com,hbomax.com,blutv.com,exxen.com,"
                     "gain.com.tr,tabii.com,puhutv.com,mubi.com,tv.apple.com,spotify.com")

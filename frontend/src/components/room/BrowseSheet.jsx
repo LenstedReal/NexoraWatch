@@ -50,7 +50,9 @@ export function BrowseSheet({ onClose, onBring }) {
   const cfg = useAppConfig();
   // Drive files are not browsed: their share link is pasted and the server imports the file.
   // The same sites as the app's browser: every listed site works the same on the web and in the app.
-  const sites = cfg.allowed_sites.filter((s) => s.domain !== "drive.google.com");
+  // Reddit only in the mobile app's browser (beta): the web names it under the list instead.
+  const sites = cfg.allowed_sites.filter((s) => s.domain !== "drive.google.com" && !s.app_only);
+  const appOnly = cfg.allowed_sites.filter((s) => s.app_only).map((s) => s.name).join(", ");
   const [step, setStep] = useState("sites"); // "sites" → "link"
   const [site, setSite] = useState(null); // {name, url}: what was opened in the other tab
   const [q, setQ] = useState("");
@@ -290,6 +292,7 @@ export function BrowseSheet({ onClose, onBring }) {
                   </button>
                 ))}
               </div>
+              {appOnly && <p className="bs-note" data-testid="browse-app-only">{t("lp_app_only", { names: appOnly })}</p>}
               <div className="bs-legal"><Info size={16} aria-hidden="true" /><span>{t("bs_legal")}</span></div>
             </>
           ) : (

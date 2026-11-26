@@ -378,7 +378,8 @@
     "kick_wait": "Yayın, oda sahibi başlatınca burada açılır.",
     "add_added": "Odaya eklendi",
     "lp_shared": "Paylaştığın video hazır: bir oda kur ya da bir odaya katıl, video oraya eklenecek.",
-    "upload_waiting": "bağlantı bekleniyor, yükleme kaldığı yerden sürecek"
+    "upload_waiting": "bağlantı bekleniyor, yükleme kaldığı yerden sürecek",
+    "lp_app_only": "{names}: yalnızca mobil uygulamada (beta). Uygulamanın tarayıcısında açıp videoyu seçebilirsin."
   },
   "en": {
     "chip": "BETTER THAN RAVE",
@@ -759,7 +760,8 @@
     "kick_wait": "The stream opens here when the host starts it.",
     "add_added": "Added to the room",
     "lp_shared": "Your shared video is ready: create or join a room and it will be added there.",
-    "upload_waiting": "waiting for the connection, the upload will go on where it stopped"
+    "upload_waiting": "waiting for the connection, the upload will go on where it stopped",
+    "lp_app_only": "{names}: only in the mobile app (beta). Open them in the app's browser and pick the video."
   },
   "de": {
     "chip": "BETTER THAN RAVE",
@@ -1140,6 +1142,7 @@
     "kick_wait": "Der Stream startet hier, sobald der Host ihn startet.",
     "add_added": "Zum Raum hinzugefügt",
     "lp_shared": "Dein geteiltes Video ist bereit: Erstelle einen Raum oder tritt einem bei, dann wird es dort hinzugefügt.",
-    "upload_waiting": "warte auf die Verbindung, der Upload geht dort weiter"
+    "upload_waiting": "warte auf die Verbindung, der Upload geht dort weiter",
+    "lp_app_only": "{names}: nur in der mobilen App (Beta). Öffne sie im Browser der App und wähle das Video."
   }
 }

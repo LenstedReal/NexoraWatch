@@ -97,7 +97,7 @@ export const HtmlPlayer = ({ video, ident, playerRef, events, onFatal, onMedia }
         }
         evRef.current.onError?.();
         if (video.kind === "upload" && (c === 2 || c === 4) && attempt < 1) setTimeout(() => setAttempt((n) => n + 1), 700);
-        else onFatal(MEDIA_ERR[c] || "unsupported");
+        else onFatal(MEDIA_ERR[c] || "unsupported", `media ${c ?? "?"}${el.error?.message ? ` ${el.error.message}` : ""}`.slice(0, 160));
       },
     };
     Object.entries(on).forEach(([k, fn]) => el.addEventListener(k, fn));
@@ -117,6 +117,8 @@ export const HtmlPlayer = ({ video, ident, playerRef, events, onFatal, onMedia }
       hls.on(Hls.Events.ERROR, (_e, d) => {
         if (!d.fatal) return;
         evRef.current.onError?.();
+        // What went wrong, in hls.js' words (shown small under the error, so a phone's report says where it broke).
+        const why = `hls ${d.details || d.type || "?"}${d.response?.code ? ` ${d.response.code}` : ""}${d.error?.message ? ` ${d.error.message}` : ""}`.slice(0, 160);
         // Loading stopped (the network, not the playlist): started again up to 3 times, 1 s, 2 s, 3 s apart.
         if (d.type === Hls.ErrorTypes.NETWORK_ERROR && !d.details?.includes("manifest") && netRetries < 3) {
           netRetries += 1;
@@ -132,8 +134,8 @@ export const HtmlPlayer = ({ video, ident, playerRef, events, onFatal, onMedia }
           recovers += 1;
           if (recovers === 1) hls.recoverMediaError();
           else if (recovers === 2) { hls.swapAudioCodec(); hls.recoverMediaError(); }
-          else onFatal("decode");
-        } else onFatal(d.details?.includes("manifest") ? "manifest_invalid" : "network");
+          else onFatal("decode", why);
+        } else onFatal(d.details?.includes("manifest") ? "manifest_invalid" : "network", why);
       });
       hls.loadSource(src);
       hls.attachMedia(el);
