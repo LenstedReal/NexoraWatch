@@ -76,7 +76,7 @@ alınabiliyor ve bu API Cloudflare bot denetiminin arkasında. Sunucudan gelen i
   TikTok'un geçtiği bir sayfaysa listeye eklenir. TikTok'a telefon/e-posta ile giriş denenmeli.
 - **HLS hatası:** HLS bir video açılmazsa hata kutusunun altındaki küçük yazının (ör. `hls manifestLoadError 403`) ekran
   görüntüsü: asıl neden bundan anlaşılır.
-- **Dikey videolar:** Facebook Reels, TikTok, Shorts ve dikey bir dosya iki telefonda: resim 3:4, video kesilmeden ve ortada.
+- **Dikey videolar:** Facebook Reels, TikTok, Shorts ve dikey bir dosya iki telefonda: resim 16:9'dan uzun ama altında sohbet görünüyor, video kesilmeden ve ortada.
 - **Instagram:** eklenmedi. Resmî oynatıcısı dışarıdan kontrol edilemiyor, dosyaları yalnızca instagram.com'da açılıyor:
   herkeste aynı anda oynatılamıyor. Kural: senkron olmayan kaynak eklenmez.
 - **Reddit yüksek kalite:** yapılmadı. Reddit akışındaki oynatıcı `f=sd` (düşük kalite) listesi veriyor; yüksek kalite

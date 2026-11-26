@@ -20,7 +20,7 @@ Arkadaşlarınla aynı videoyu **aynı anda** izlediğin, Rave benzeri birlikte 
 | Google Drive | herkese açık dosya içe aktarılır | var |
 | MP4 / M3U8 bağlantısı, telefondan yüklenen video | kendi oynatıcımız (kalite, altyazı, sıra) | var |
 
-**Dikey videolar (1.8.6).** TikTok, YouTube Shorts, Facebook Reels ve dikey dosyalar dik tutulan telefonda 3:4'lük daha uzun bir resimde oynar (16:9'luk şeridin ortasında küçücük kalmaz, oynatıcı da daha iyi kalite seçer). Facebook'un oynatıcısı artık kesilmez: resme sığdırılıp ortalanır (önce yalnızca üst kısmı büyütülmüş görünüyordu). Yatay telefon, tam ekran ve geniş ekranlar eskisi gibi.
+**Dikey videolar (1.8.6).** TikTok, YouTube Shorts, Facebook Reels ve dikey dosyalar dik tutulan telefonda daha uzun bir resimde oynar (16:9'luk şeridin ortasında küçücük kalmaz, oynatıcı da daha iyi kalite seçer). Resim, altındaki sohbet görünür kalacak kadar büyür: ekranın yaklaşık 430 pikseli üst çubuk, oynatıcı çubuğu, sekmeler ve sohbet için kalır (ilk 1.8.6'daki 3:4 resim sohbeti kapatıyordu). Facebook'un oynatıcısı artık kesilmez: resme sığdırılıp ortalanır (önce yalnızca üst kısmı büyütülmüş görünüyordu). Yatay telefon, tam ekran ve geniş ekranlar eskisi gibi.
 
 **Uygulamanın tarayıcısı (1.8.6).** Sitenin Paylaş → Bağlantıyı kopyala düğmesi videoyu listeye ekler (TikTok kısa bağlantıları dahil); "Geçiş engellendi" uyarısı hangi siteye gidilmek istendiğini yazar; TikTok'un giriş ve güvenlik doğrulama sayfalarına izin var. Oynatıcı hata verirse hata kutusunun altında oynatıcının kendi teknik açıklaması (ör. `hls fragLoadError 403`) küçük yazıyla görünür.
 

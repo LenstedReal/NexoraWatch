@@ -6,6 +6,11 @@
 - `tests/upload_smoke.py <API> tests/sample.mp4` — multipart yükleme, Range 206, bayt eşleşmesi, yetkisiz silme/yükleme 403, kota 413, format 415.
 - Backend smoke (oda/rejoin/host-only/stale seq/WS hello-pong-push/kötü token/oda kalıcılığı) — sonuçlar `test_reports/`.
 
+## 1.8.6 düzeltmesi (26 Kasım 2026): dikey videonun resmi sohbeti kapatmasın
+- Gerçek telefonda görülen: 3:4 resim sohbeti ekranın altına itiyordu. Resim artık `clamp(16:9, ekran - 430px, 4:5)`
+  yüksekliğinde. Web (Playwright): 390x844'te 414 px (3:4 520'ydi), 360x640'ta 210 px, 412x915'te 485 px; üç boyutta da
+  altında sohbet mesajlarına en az 140 px kalıyor; reel yine kesilmeden ve ortada. Dikey video testi 44/44, eski testler geçti.
+
 ## 1.8.6 (26 Kasım 2026): bu ortamda çalıştırılanlar
 - Sunucu: `cd backend && pytest -q tests/test_resolver_sources.py tests/test_services.py` → 111 geçti (ağ kapalı). Yeni:
   site listesinde Reddit `app_only` + `beta`. Instagram eklenmedi: oynatıcısı dışarıdan kontrol edilemiyor, dosyaları yalnızca
